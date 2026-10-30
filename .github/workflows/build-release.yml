@@ -49,7 +49,7 @@ jobs:
         run: |
           $zip = "AI-Partner-Windows-x64.zip"
           if (Get-Command 7z.exe -ErrorAction SilentlyContinue) {
-            7z a -tzip $zip ".\dist\AI智能伴侣\" -mx=5 | Out-Null
+            7z a -tzip $zip ".\dist\AI智能伴侣" -mx=5 | Out-Null
           } else {
             Compress-Archive -Path ".\dist\AI智能伴侣" -DestinationPath $zip -CompressionLevel Optimal
           }

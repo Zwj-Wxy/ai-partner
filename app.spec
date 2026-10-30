@@ -46,7 +46,6 @@ excludes = [
     "notebook",
     "jupyter",
     "pytest",
-    "setuptools._distutils",
 ]
 
 a = Analysis(

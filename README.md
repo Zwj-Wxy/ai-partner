@@ -1,11 +1,11 @@
-# 🤖 AI 智能伴侣
+# AI 智能伴侣
+
+<p align="center">
+  <img src="docs/banner.png" alt="AI 智能伴侣" width="100%">
+</p>
 
 > 一个可以"住"进你电脑的 AI 伴侣：基于 **Streamlit + DeepSeek** 的拟人化聊天应用。
 > 支持自定义昵称与性格、多会话管理、本地存档；可一键打包成 Windows 绿色版 exe，也可直接部署成在线网页。
-
-<p align="left">
-  <img src="resources/logo.png" alt="AI 智能伴侣" width="120">
-</p>
 
 ---
 

@@ -56,7 +56,7 @@ if (-not $NoZip) {
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Write-Host "==> 压缩为 $zip" -ForegroundColor Cyan
     if (Get-Command 7z.exe -ErrorAction SilentlyContinue) {
-        7z a -tzip $zip "$outDir\" -mx=5 | Out-Null
+        7z a -tzip $zip "$outDir" -mx=5 | Out-Null
     } else {
         Compress-Archive -Path $outDir -DestinationPath $zip -CompressionLevel Optimal
     }
