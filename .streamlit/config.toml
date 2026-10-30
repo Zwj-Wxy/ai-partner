@@ -1,0 +1,18 @@
+[theme]
+base = "light"
+primaryColor = "#FF6B9D"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F7F9"
+textColor = "#262730"
+font = "sans serif"
+
+[client]
+# 隐藏右上角的开发菜单，更像一个成品软件
+toolbarMode = "minimal"
+showErrorDetails = true
+
+[server]
+headless = false
+
+[browser]
+gatherUsageStats = false
