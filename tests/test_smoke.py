@@ -82,14 +82,29 @@ def _make_fake_streamlit():
 
 
 def main() -> None:
-    sys.modules["streamlit"] = _make_fake_streamlit()
+    st_mod = _make_fake_streamlit()
+    sys.modules["streamlit"] = st_mod
 
-    # 假的 openai（避免真的去构造客户端）
+    # 假的 openai（避免真的去构造客户端 / 真的发请求）
     openai_mod = types.ModuleType("openai")
+
+    fake_models = ["deepseek-chat", "deepseek-reasoner"]
+    fail = {"on": False}
+
+    class _Model:
+        def __init__(self, mid):
+            self.id = mid
+
+    class _ModelsAPI:
+        def list(self):
+            if fail["on"]:
+                raise RuntimeError("Error code: 401 - Unauthorized")
+            return types.SimpleNamespace(data=[_Model(m) for m in fake_models])
 
     class _OpenAI:
         def __init__(self, *a, **kw):
             self.api_key = kw.get("api_key")
+            self.models = _ModelsAPI()
 
     openai_mod.OpenAI = _OpenAI
     sys.modules["openai"] = openai_mod
@@ -109,6 +124,58 @@ def main() -> None:
     assert app.st.session_state.current_session in app.load_sessions(), "会话未保存"
     app.delete_session(app.st.session_state.current_session)
     assert app.st.session_state.current_session not in app.load_sessions(), "会话未删除"
+
+    # ---- API 设置：密钥状态 / 测试连接 / 记住到本机 ----
+    assert app._mask("") == "未配置"
+    assert app._mask("sk-1234567890abcdef").startswith("sk-123")      # 只露头
+    assert app._mask("sk-1234567890abcdef").endswith("cdef")           # 只露尾
+
+    ok, msg = app.test_connection("", "deepseek-chat")
+    assert not ok and "API Key" in msg, "空密钥应直接拒绝"
+
+    ok, msg = app.test_connection("sk-test", "deepseek-chat")
+    assert ok and "deepseek-chat" in msg, f"正常连接判断有误: {msg}"
+
+    ok, msg = app.test_connection("sk-test", "deepseek-flash")
+    assert ok and "⚠️" in msg, "模型名不在可用列表时应当给出警告"
+
+    fail["on"] = True
+    ok, msg = app.test_connection("sk-bad", "deepseek-chat")
+    assert not ok and "连接失败" in msg, f"失败时应报错: {msg}"
+    fail["on"] = False
+
+    # 勾选"记住到本机" → 落盘；取消 → 删除
+    app.st.session_state.model_name = "deepseek-chat"
+    app._sync_config(True)
+    assert os.path.exists(app.CONFIG_FILE), "勾选记住后 config.json 未生成"
+    saved = app._read_config()
+    assert saved["api_key"] == app.st.session_state.api_key
+    assert saved["model"] == "deepseek-chat"
+    app._sync_config(False)
+    assert not os.path.exists(app.CONFIG_FILE), "取消记住后 config.json 未删除"
+
+    # ---- 第二次导入：没有环境变量，覆盖侧边栏"手动输入密钥"那条分支 ----
+    os.environ.pop("DEEPSEEK_API_KEY", None)
+    sys.modules.pop("app", None)
+    st_mod.session_state = _State(current_session="")   # 干净的界面状态
+    import app as app_ui  # noqa: F401
+
+    assert app_ui.st.session_state.api_key == "", "无来源时密钥应为空"
+    assert app_ui._from_config() == "", "此时不应读到本机配置"
+    assert app_ui.st.session_state.model_name, "模型名未初始化"
+    assert not os.path.exists(app_ui.CONFIG_FILE), "未勾选记住时不该写 config.json"
+
+    # 模拟：用户粘贴了密钥 + 勾选"记住到本机"
+    app_ui.st.session_state.api_key = "sk-manual-1234567890"
+    app_ui.st.session_state.model_name = "deepseek-chat"
+    app_ui._sync_config(True)
+    assert app_ui._from_config() == "sk-manual-1234567890", "记住到本机没生效"
+    assert app_ui._read_config().get("model") == "deepseek-chat"
+
+    # 模拟：用户把输入框清空（仍然勾着记住）→ 本机不能留旧密钥
+    app_ui.st.session_state.api_key = ""
+    app_ui._sync_config(True)
+    assert not os.path.exists(app_ui.CONFIG_FILE), "清空密钥后 config.json 应被删除"
 
     print("OK: app.py 冒烟测试通过")
     print(f"    sessions dir -> {app.SESSIONS_DIR}")

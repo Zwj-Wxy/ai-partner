@@ -95,29 +95,90 @@ def _from_secrets(name: str) -> str:
         return ""
 
 
-def _from_config() -> str:
+def _read_config() -> dict:
+    """读本机 config.json（保存密钥和模型名，出任何错都当成空配置）。"""
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return str(json.load(f).get("api_key", "")).strip()
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        return ""
+        return {}
 
 
-def _save_config(api_key: str) -> None:
+def _write_config(**updates) -> None:
+    """把设置合并写回 config.json；空值会被删掉，避免留下半截配置。"""
+    data = _read_config()
+    data.update(updates)
+    data = {k: v for k, v in data.items() if v not in ("", None)}
     try:
         os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump({"api_key": api_key}, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        if os.name == "posix":
+            os.chmod(CONFIG_FILE, 0o600)  # 只有自己能读
     except OSError:
         pass
 
 
+def _clear_config() -> None:
+    """删除本机保存的密钥（"不再记住"时调用）。"""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            os.remove(CONFIG_FILE)
+    except OSError:
+        pass
+
+
+def _from_config() -> str:
+    return str(_read_config().get("api_key", "")).strip()
+
+
+def _mask(key: str) -> str:
+    """只显示密钥的头尾，方便确认"填的是哪一把"，又不至于泄露。"""
+    if not key:
+        return "未配置"
+    return f"{key[:6]}…{key[-4:]}" if len(key) > 12 else "已配置"
+
+
+def test_connection(api_key: str, model: str) -> tuple:
+    """做一次最轻量的调用，确认「密钥 + 网络 + 模型名」三件事都对。"""
+    if not api_key:
+        return False, "请先填入 API Key。"
+    try:
+        client = OpenAI(api_key=api_key, base_url=BASE_URL)
+        models = [m.id for m in client.models.list().data]
+    except Exception as exc:
+        return False, f"连接失败：{exc}"
+
+    msg = "连接正常 ✅"
+    if models:
+        msg += f"，可用模型：{'、'.join(models[:6])}"
+        if model not in models:
+            msg += f"\n\n⚠️ 当前模型 `{model}` 不在上面列表里，调用大概率失败，建议换成 `{models[0]}`。"
+    return True, msg
+
+
+def _sync_config(remember: bool) -> None:
+    """按复选框状态把当前密钥/模型写入或清出 config.json（只在有变化时写盘）。"""
+    current = _read_config()
+    if remember and st.session_state.api_key:
+        if (current.get("api_key") != st.session_state.api_key
+                or current.get("model") != st.session_state.model_name):
+            _write_config(api_key=st.session_state.api_key, model=st.session_state.model_name)
+    else:
+        # 没勾选，或者把密钥清空了 —— 都不该在本机留下东西
+        _clear_config()
+
+
+_cfg = _read_config()
 if "api_key" not in st.session_state:
     st.session_state.api_key = (
         os.environ.get("DEEPSEEK_API_KEY", "").strip()
         or _from_secrets("DEEPSEEK_API_KEY")
-        or _from_config()
+        or str(_cfg.get("api_key", "")).strip()
     )
+if "model_name" not in st.session_state:
+    st.session_state.model_name = str(_cfg.get("model", "")).strip() or MODEL_NAME
 
 
 # --------------------------------------------------------------------------
@@ -233,6 +294,13 @@ if os.path.exists(logo):
     except Exception:
         pass
 
+if not st.session_state.api_key:
+    st.info(
+        "还没配置 DeepSeek API Key：到左侧 **🔑 API 设置** 里粘贴密钥"
+        "（[点这里申请](https://platform.deepseek.com/api_keys)），"
+        "填完点「🔍 测试连接」确认可用，就能开始聊天了。"
+    )
+
 
 # --------------------------------------------------------------------------
 # 侧边栏
@@ -277,20 +345,55 @@ with st.sidebar:
 
     st.divider()
 
-    with st.expander("🔑 API 密钥设置", expanded=not st.session_state.api_key):
+    st.subheader("🔑 API 设置")
+
+    env_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    secret_key = _from_secrets("DEEPSEEK_API_KEY")
+    locked = bool(env_key or secret_key)   # 环境变量 / secrets 提供时，界面只读
+    remember = False
+
+    if locked:
+        st.success(f"密钥已由{'系统环境变量' if env_key else ' Streamlit secrets'}提供，自动生效，无需填写。")
+    else:
         typed_key = st.text_input(
             "DeepSeek API Key",
             value=st.session_state.api_key,
             type="password",
-            placeholder="sk-...",
-            help="在 https://platform.deepseek.com 申请；只保存在你自己的电脑上。",
+            placeholder="sk-...（粘贴后回车）",
+            help="在 https://platform.deepseek.com/api_keys 申请；只保存在你自己的电脑上。",
+        ).strip()
+        if typed_key != st.session_state.api_key:
+            st.session_state.api_key = typed_key
+
+        remember = st.checkbox(
+            "记住到本机（下次启动免输入）",
+            value=bool(_from_config()),
+            help="勾选后明文写入程序目录的 config.json；取消勾选就等于删除该文件。",
         )
-        remember = st.checkbox("记住密钥（保存到本机 config.json）", value=bool(_from_config()))
-        if typed_key.strip() != st.session_state.api_key:
-            st.session_state.api_key = typed_key.strip()
-            if remember and st.session_state.api_key:
-                _save_config(st.session_state.api_key)
-        st.caption(f"接口地址：{BASE_URL}　模型：{MODEL_NAME}")
+
+    if st.session_state.api_key:
+        st.caption(f"状态：✅ 已配置　{_mask(st.session_state.api_key)}")
+    else:
+        st.caption("状态：⚠️ 未配置，聊天前必须先填")
+
+    # 模型放在「测试连接」之前，这样改完名字顺手一测就是新模型的真实结果
+    model_input = st.text_input(
+        "模型",
+        value=st.session_state.model_name,
+        help="DeepSeek 官方可用：deepseek-chat、deepseek-reasoner。名字写错会直接报 400。",
+    ).strip()
+    if model_input and model_input != st.session_state.model_name:
+        st.session_state.model_name = model_input
+
+    if st.button("🔍 测试连接", width="stretch"):
+        ok, msg = test_connection(st.session_state.api_key, st.session_state.model_name)
+        (st.success if ok else st.error)(msg)
+
+    st.caption(f"接口地址：{BASE_URL}")
+
+    # 放在最后同步：这样"改了模型但没改密钥"也能一起存进去
+    if not locked:
+        _sync_config(remember)
 
 
 # --------------------------------------------------------------------------
@@ -308,7 +411,7 @@ prompt = st.chat_input("请输入您的问题")
 if prompt:
     if not st.session_state.api_key:
         st.chat_message("user").write(prompt)
-        st.error("还没有配置 DeepSeek API Key：请在左侧「🔑 API 密钥设置」里填写后再发送。")
+        st.error("还没有配置 DeepSeek API Key：请在左侧「🔑 API 设置」里填写后再发送。")
         st.stop()
 
     st.chat_message("user").write(prompt)
@@ -317,7 +420,7 @@ if prompt:
     try:
         client = OpenAI(api_key=st.session_state.api_key, base_url=BASE_URL)
         response = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=st.session_state.model_name,
             messages=[
                 {
                     "role": "system",

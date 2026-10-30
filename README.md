@@ -33,7 +33,7 @@
 
 1. 解压到任意目录（路径别带空格更稳）；
 2. 双击 `启动AI智能伴侣.bat`，浏览器会自动打开 `http://localhost:8501`；
-3. 第一次运行在左侧「🔑 API 密钥设置」里填入 DeepSeek API Key 即可开聊。
+3. 第一次运行在左侧「🔑 API 设置」里填入 DeepSeek API Key 即可开聊。
 
 > 程序完全离线运行在你的电脑上，聊天记录保存在同目录的 `sessions/` 文件夹。
 
@@ -51,16 +51,22 @@ streamlit run app.py
 
 ## 🔑 配置 API 密钥
 
+**最省事的做法**：打开应用 → 左侧边栏「🔑 API 设置」→ 粘贴 `sk-...` 回车 → 点「🔍 测试连接」看到绿色的"连接正常"即可。
+勾选「记住到本机」后，下次启动不用再填；取消勾选会自动删掉本机存的那份。
+
 密钥优先级（从高到低）：
 
-1. **环境变量** `DEEPSEEK_API_KEY`
+1. **环境变量** `DEEPSEEK_API_KEY`（一旦存在，界面里的输入框会变只读，避免两处互相覆盖）
 2. **Streamlit Secrets**（仅在线部署时）：`.streamlit/secrets.toml` 中写 `DEEPSEEK_API_KEY = "sk-..."`，或在 Streamlit Cloud 的 App settings → Secrets 里粘贴
-3. **本地 `config.json`**：在界面里输入后勾选"记住密钥"
-4. **界面输入**：左侧边栏「🔑 API 密钥设置」，仅当前会话有效
+3. **本地 `config.json`**：界面里勾选"记住到本机"后生成，形如 `{"api_key": "sk-...", "model": "deepseek-chat"}`
+4. **界面手动输入**：仅当前会话有效，关掉就没了
 
-可选环境变量：`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`DEEPSEEK_MODEL`（默认 `deepseek-flash`）。
+其他可调项：接口地址 `DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、模型 `DEEPSEEK_MODEL`；
+模型名也可以直接在侧边栏「模型」里改（DeepSeek 官方可用 `deepseek-chat`、`deepseek-reasoner`，
+写错名字接口会直接返回 400，所以「测试连接」会顺手告诉你当前模型在不在可用列表里）。
 
 > ⚠️ **密钥就是钱**。`config.json`、`.streamlit/secrets.toml` 已被 `.gitignore` 排除，**永远不要**把它们提交到 GitHub。
+> `config.json` 在 Windows 上是明文 JSON，别把这台机器上的这个文件发给别人。
 
 ## 📦 打包成 Windows exe
 
