@@ -10,6 +10,8 @@ AI 智能伴侣 —— 基于 Streamlit + DeepSeek 的拟人化聊天伴侣
     DEEPSEEK_API_KEY     DeepSeek 接口密钥
     DEEPSEEK_BASE_URL    接口地址，默认 https://api.deepseek.com
     DEEPSEEK_MODEL       模型名，默认 deepseek-flash
+    AI_PARTNER_CONTEXT   每次请求带多少条历史消息，默认 20（设 0 表示不截断）
+    AI_PARTNER_HOME      数据目录（sessions/ 与 config.json 放哪），默认跟程序走
 """
 
 import os
@@ -23,6 +25,21 @@ from openai import OpenAI
 APP_TITLE = "AI智能伴侣"
 BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
 MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash").strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    """读一个整数环境变量，写错了就安静地用默认值。"""
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+# 每次请求最多带多少条历史消息：聊得越久，全部塞给模型会越来越慢、越来越贵，
+# 而且迟早超过模型的上下文上限直接报 400。默认只带最近 20 条。
+CONTEXT_LIMIT = max(0, _env_int("AI_PARTNER_CONTEXT", 20))
+# 界面上最多直接渲染多少条历史（更早的收进折叠区），避免长会话首屏卡顿
+HISTORY_RENDER_LIMIT = 60
 
 
 # --------------------------------------------------------------------------
@@ -82,6 +99,18 @@ st.set_page_config(
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+# 纯外观微调：正文收窄居中（宽屏上别拉成一整行）、气泡圆角。改坏了也只是难看，不影响功能。
+st.markdown(
+    """
+    <style>
+      .block-container { max-width: 880px; padding-top: 2.2rem; }
+      [data-testid="stChatMessage"] { border-radius: 14px; }
+      [data-testid="stChatMessage"] p { line-height: 1.75; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -390,6 +419,11 @@ with st.sidebar:
         (st.success if ok else st.error)(msg)
 
     st.caption(f"接口地址：{BASE_URL}")
+    st.caption(
+        f"上下文：每次带最近 {CONTEXT_LIMIT} 条消息"
+        if CONTEXT_LIMIT
+        else "上下文：不截断（长会话会更慢、更贵）"
+    )
 
     # 放在最后同步：这样"改了模型但没改密钥"也能一起存进去
     if not locked:
@@ -400,13 +434,49 @@ with st.sidebar:
 # 展示历史消息
 # --------------------------------------------------------------------------
 st.caption(f"会话名称：{st.session_state.current_session}")
-for message in st.session_state.messages:
+
+_history = st.session_state.messages
+if len(_history) > HISTORY_RENDER_LIMIT:
+    _older = _history[:-HISTORY_RENDER_LIMIT]
+    with st.expander(f"更早的 {len(_older)} 条消息（点击展开）"):
+        for message in _older:
+            st.chat_message(message["role"]).write(message["content"])
+    _history = _history[-HISTORY_RENDER_LIMIT:]
+
+for message in _history:
     st.chat_message(message["role"]).write(message["content"])
 
 
 # --------------------------------------------------------------------------
 # 消息输入与流式回复
 # --------------------------------------------------------------------------
+def _recent_messages() -> list:
+    """只把最近 CONTEXT_LIMIT 条历史发给模型（含刚刚发出的这条）。"""
+    messages = st.session_state.messages
+    if CONTEXT_LIMIT <= 0:
+        return messages
+    return messages[-CONTEXT_LIMIT:]
+
+
+def _stream_text(response, keep=None):
+    """把 OpenAI 的流式响应拆成纯文本块；顺带丢掉只有思考过程、没有正文的空块。
+
+    传了 keep（list）就把吐出去的每段也存一份：万一流到一半断线，
+    已经收到的半截回复还能留在会话里，而不是凭空消失。
+    """
+    try:
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            piece = getattr(chunk.choices[0].delta, "content", None)
+            if piece:
+                if keep is not None:
+                    keep.append(piece)
+                yield piece
+    except Exception as exc:  # 流到一半失败：报出来，已吐出来的字留在界面上
+        st.error(f"回复中断：{exc}")
+
+
 prompt = st.chat_input("请输入您的问题")
 if prompt:
     if not st.session_state.api_key:
@@ -417,8 +487,14 @@ if prompt:
     st.chat_message("user").write(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
+    full_response = ""
     try:
-        client = OpenAI(api_key=st.session_state.api_key, base_url=BASE_URL)
+        client = OpenAI(
+            api_key=st.session_state.api_key,
+            base_url=BASE_URL,
+            timeout=60,      # 别让网络卡住时界面一直转圈
+            max_retries=2,   # 偶发的 429 / 连接重置，SDK 自己重试
+        )
         response = client.chat.completions.create(
             model=st.session_state.model_name,
             messages=[
@@ -426,23 +502,27 @@ if prompt:
                     "role": "system",
                     "content": system_prompt % (st.session_state.nick_name, st.session_state.nature),
                 },
-                *st.session_state.messages,
+                *_recent_messages(),
             ],
             stream=True,
             reasoning_effort="high",
             extra_body={"thinking": {"type": "enabled"}},
         )
-
-        response_message = st.empty()
-        full_response = ""
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                full_response += chunk.choices[0].delta.content
-                response_message.write(full_response)
     except Exception as exc:
-        st.error(f"调用大模型失败：{exc}")
+        # 请求阶段就失败（密钥、余额、模型名、网络）——不要把报错塞进她的气泡里
+        st.error(f"调用大模型失败：{exc}\n\n可以点左侧的「🔍 测试连接」先确认密钥和网络是否正常。")
         save_session()
         st.stop()
+
+    with st.chat_message("assistant"):
+        collected: list = []
+        # write_stream 会一段一段地吐字，不用每来一个字就整段重绘
+        full_response = st.write_stream(_stream_text(response, collected)) or ""
+        if not str(full_response).strip():
+            full_response = "".join(collected)
+
+    if not str(full_response).strip():
+        full_response = "（这条没收到内容，可能是网络中断或额度不足，再说一次试试？）"
 
     st.session_state.messages.append({"role": "assistant", "content": full_response})
     save_session()

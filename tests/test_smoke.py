@@ -77,6 +77,7 @@ def _make_fake_streamlit():
     st.text_input = lambda *a, **kw: kw.get("value", "")
     st.text_area = lambda *a, **kw: kw.get("value", "")
     st.chat_input = lambda *a, **kw: None   # 不触发对话分支
+    st.write_stream = lambda gen, **kw: "".join(gen)
     st.stop = lambda *a, **kw: None
     return st
 
@@ -124,6 +125,24 @@ def main() -> None:
     assert app.st.session_state.current_session in app.load_sessions(), "会话未保存"
     app.delete_session(app.st.session_state.current_session)
     assert app.st.session_state.current_session not in app.load_sessions(), "会话未删除"
+
+    # ---- 上下文截断 & 流式解析 ----
+    keep = list(app.st.session_state.messages)
+    app.st.session_state.messages = [{"role": "user", "content": str(i)} for i in range(50)]
+    recent = app._recent_messages()
+    assert len(recent) == min(app.CONTEXT_LIMIT, 50), "上下文截断条数不对"
+    assert recent[-1]["content"] == "49", "截断后必须保留最新消息"
+    app.st.session_state.messages = keep
+
+    chunk = lambda txt=None, choices=True: types.SimpleNamespace(   # noqa: E731
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(content=txt))] if choices else []
+    )
+    fake_stream = [chunk(choices=False), chunk(None), chunk("嗨"), chunk("呀")]
+    assert list(app._stream_text(fake_stream)) == ["嗨", "呀"], "流式文本解析不对"
+
+    kept = []
+    list(app._stream_text([chunk("半"), chunk("截")], kept))
+    assert kept == ["半", "截"], "keep 应记下已吐出的片段（断线时用来保住半截回复）"
 
     # ---- API 设置：密钥状态 / 测试连接 / 记住到本机 ----
     assert app._mask("") == "未配置"
