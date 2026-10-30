@@ -176,8 +176,11 @@ ai_partner/
 ├── resources/                  # 静态资源（logo 等）
 ├── packaging/                  # 提供给最终用户的启动/停止脚本
 ├── docs/使用说明.md            # 给最终用户看的说明书
+├── docs/banner.png             # README 横幅
+├── tests/test_smoke.py         # 冒烟测试（不依赖网络，CI 里会跑）
 ├── .streamlit/config.toml      # 主题与运行参数
 ├── scripts/build.ps1           # 一键打包脚本
+├── scripts/make_banner.py      # 重新生成横幅
 └── .github/workflows/
     └── build-release.yml       # 推 tag 自动打包并发 Release
 ```
@@ -198,6 +201,10 @@ PyInstaller 产物被误报很常见。可选做法：给 exe 加代码签名证
 
 **Q：聊天记录在哪？**
 程序目录下的 `sessions/*.json`；若程序目录不可写（如装在 `C:\Program Files`），会自动落到 `%USERPROFILE%\.ai_partner\sessions\`。
+也可以用环境变量 `AI_PARTNER_HOME` 指定一个数据目录（比如放到 U 盘或网盘同步盘里），会话与 `config.json` 都会跟着走。
+
+**Q：怎么自测有没有改坏？**
+`python tests/test_smoke.py` —— 不需要联网、不需要真的 API Key，跑一遍就能发现语法错误和路径问题。
 
 ## 📄 许可证
 

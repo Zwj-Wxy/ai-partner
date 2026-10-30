@@ -49,9 +49,14 @@ def resource_path(relative_path: str) -> str:
     return relative_path
 
 
+def _data_home() -> str:
+    """数据目录：默认跟着程序走；设置 AI_PARTNER_HOME 可改到别处（绿色版/便携模式）。"""
+    return (os.environ.get("AI_PARTNER_HOME") or "").strip() or app_root()
+
+
 def _pick_sessions_dir() -> str:
     """会话保存目录：优先程序目录，不可写（如装在 Program Files）时退到用户目录。"""
-    for base in (app_root(), os.path.join(os.path.expanduser("~"), ".ai_partner")):
+    for base in (_data_home(), os.path.join(os.path.expanduser("~"), ".ai_partner")):
         folder = os.path.join(base, "sessions")
         try:
             os.makedirs(folder, exist_ok=True)
@@ -65,7 +70,7 @@ def _pick_sessions_dir() -> str:
     return "sessions"
 
 
-CONFIG_FILE = os.path.join(app_root(), "config.json")
+CONFIG_FILE = os.path.join(_data_home(), "config.json")
 SESSIONS_DIR = _pick_sessions_dir()
 
 

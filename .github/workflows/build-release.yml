@@ -34,6 +34,9 @@ jobs:
       - name: Syntax check
         run: python -m py_compile app.py launcher.py
 
+      - name: Smoke test
+        run: python tests/test_smoke.py
+
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean app.spec
 

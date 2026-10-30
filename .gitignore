@@ -19,6 +19,9 @@ config.json
 sessions/
 .streamlit/secrets.toml
 
+# 测试临时目录
+.smoke_tmp/
+
 # 编辑器 / 系统
 .vscode/
 .idea/
