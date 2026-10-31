@@ -189,6 +189,28 @@ def main() -> int:
             else:
                 print(f"  ✓ {name}（GBK + CRLF）")
 
+    # PowerShell 脚本反过来：必须是「UTF-8 带 BOM + CRLF」。
+    # 没有 BOM 时 PS 5.1 会按 GBK 解码，中文乱码还会打乱引号配对，
+    # 报 "字符串缺少终止符" / "缺少右 }"，安装脚本直接跑不起来。
+    for ps_dir in (os.path.join(ROOT, "packaging"), os.path.join(ROOT, "scripts"), base):
+        for path in sorted(glob.glob(os.path.join(ps_dir, "*.ps1"))):
+            name = os.path.relpath(path, ROOT)
+            raw = open(path, "rb").read()
+            problems = []
+            if not raw.startswith(b"\xef\xbb\xbf"):
+                problems.append("没有 UTF-8 BOM")
+            if raw.count(b"\r\n") != raw.count(b"\n"):
+                problems.append("行尾不是 CRLF")
+            try:
+                raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                problems.append("不是 UTF-8 编码")
+            if problems:
+                required_failed.append(f"{name}（{'、'.join(problems)}）")
+                print(f"  ✗ {name} —— {'、'.join(problems)}；PowerShell 里会报“字符串缺少终止符”")
+            else:
+                print(f"  ✓ {name}（UTF-8 BOM + CRLF）")
+
     # 真把 exe 跑一遍自检：静态检查看不出的缺失（比如少了 openai 模块）
     # 在这里当场暴露，而不是等用户打开网页看见一段红字 Traceback
     exe_path = os.path.join(base, "AI智能伴侣.exe")

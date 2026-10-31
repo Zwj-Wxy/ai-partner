@@ -48,6 +48,23 @@ def convert(path: str) -> bool:
     return True
 
 
+def fix_ps1(path: str) -> bool:
+    """PowerShell 5.1 读没有 BOM 的 UTF-8 会按 GBK 解码，中文全变乱码、
+    引号配对被打乱，于是报 `字符串缺少终止符` / `缺少右“}”`。
+    所以 .ps1 必须是「UTF-8 带 BOM + CRLF」。
+    """
+    raw = open(path, "rb").read()
+    has_bom = raw.startswith(b"\xef\xbb\xbf")
+    text = raw.decode("utf-8-sig", errors="replace")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    data = text.replace("\n", "\r\n")
+    if not data.endswith("\r\n"):
+        data += "\r\n"
+    open(path, "wb").write(b"\xef\xbb\xbf" + data.encode("utf-8"))
+    print(f"  {'已是' if has_bom else '已补 BOM'}：{path}")
+    return True
+
+
 def main() -> int:
     files = sorted(glob.glob(os.path.join(ROOT, "packaging", "*.bat")))
     files += sorted(glob.glob(os.path.join(ROOT, "scripts", "*.bat")))
@@ -56,6 +73,11 @@ def main() -> int:
         return 1
     for f in files:
         convert(f)
+
+    ps1 = sorted(glob.glob(os.path.join(ROOT, "packaging", "*.ps1")))
+    ps1 += sorted(glob.glob(os.path.join(ROOT, "scripts", "*.ps1")))
+    for f in ps1:
+        fix_ps1(f)
     print("完成。")
     return 0
 
