@@ -104,6 +104,27 @@ def main() -> int:
     else:
         required_failed.append("无法比对 app.py")
 
+    # 批处理文件：LF 行尾或 UTF-8 存盘都会让 cmd 把多行拼成乱码命令，
+    # 用户双击就看到一串 "'浠跺彜閲屻€?' 不是内部或外部命令"
+    for bat_dir in (os.path.join(ROOT, "packaging"), base):
+        for path in sorted(glob.glob(os.path.join(bat_dir, "*.bat"))):
+            name = os.path.relpath(path, ROOT)
+            raw = open(path, "rb").read()
+            problems = []
+            if raw.count(b"\r\n") != raw.count(b"\n"):
+                problems.append("行尾不是 CRLF")
+            if raw.startswith(b"\xef\xbb\xbf"):
+                problems.append("带了 UTF-8 BOM")
+            try:
+                raw.decode("gbk")
+            except UnicodeDecodeError:
+                problems.append("不是 GBK 编码")
+            if problems:
+                required_failed.append(f"{name}（{'、'.join(problems)}）")
+                print(f"  ✗ {name} —— {'、'.join(problems)}；cmd 里会整段乱码")
+            else:
+                print(f"  ✓ {name}（GBK + CRLF）")
+
     print()
     if required_failed:
         print(f"结论：不通过，缺 {len(required_failed)} 项 —— {'、'.join(required_failed)}")

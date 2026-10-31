@@ -1,14 +1,14 @@
 @echo off
-chcp 65001 >nul
-title åœæ­¢ AIæ™ºèƒ½ä¼´ä¾£
+chcp 936 >nul
+title Í£Ö¹ AIÖÇÄÜ°éÂÂ
 
-echo æ­£åœ¨ç»“æŸ AIæ™ºèƒ½ä¼´ä¾£.exe ...
-taskkill /IM "AIæ™ºèƒ½ä¼´ä¾£.exe" /F >nul 2>&1
+echo ÕýÔÚ½áÊø AIÖÇÄÜ°éÂÂ.exe ...
+taskkill /IM "AIÖÇÄÜ°éÂÂ.exe" /F >nul 2>&1
 
 if %errorlevel%==0 (
-    echo å·²åœæ­¢ã€‚
+    echo ÒÑÍ£Ö¹¡£
 ) else (
-    echo ç¨‹åºæœ¬æ¥å°±æ²¡åœ¨è¿è¡Œã€‚
+    echo ³ÌÐò±¾À´¾ÍÃ»ÔÚÔËÐÐ¡£
 )
 
 timeout /t 2 /nobreak >nul

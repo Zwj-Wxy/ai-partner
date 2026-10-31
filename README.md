@@ -117,6 +117,11 @@ Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
 
 三道闸任意一道不过，Release 就不会生成。
 
+> 还有一个只在中文 Windows 上才踩的坑：`.bat` 必须是 **GBK 编码 + CRLF 行尾**。
+> LF 行尾会被 cmd 当成一条超长命令、UTF-8 的中文会被按 GBK 解码，
+> 用户双击就看到一串 `'浠跺彜閲屻€?' 不是内部或外部命令`。
+> `python scripts/fix_bat_encoding.py` 可一键修正，`verify_bundle.py` 也会把它拦下来。
+
 > 实测记录（2026-10-31）：Python 3.13.9 + Streamlit 1.66.0 + PyInstaller 6.22.3 打包，
 > exe 启动后 `http://127.0.0.1:8501` 返回 200、`_stcore/health` 返回 `ok`，
 > `AppTest` 三种情形均无异常。
@@ -226,6 +231,7 @@ ai_partner/
 ├── .streamlit/config.toml      # 主题与运行参数
 ├── scripts/build.ps1           # 一键打包脚本
 ├── scripts/verify_bundle.py    # 产物完整性检查（缺 static/元数据就报错）
+├── scripts/fix_bat_encoding.py # 把 .bat 统一成 GBK + CRLF（否则 cmd 乱码）
 ├── scripts/make_banner.py      # 重新生成横幅
 └── .github/workflows/
     └── build-release.yml       # 推 tag 自动打包并发 Release
@@ -239,6 +245,14 @@ ai_partner/
 如果看到的是 `PackageNotFoundError: No package metadata was found for streamlit`，
 那不是你电脑的问题，是这个包在打包时漏了 Streamlit 的元数据——换一个最新 Release 里的包，
 或者干脆按下面的「源码运行」跑。本仓库的 `app.spec` 已经修掉了这个坑，CI 也会先把 exe 跑起来验证再发布。
+
+**Q：双击 `启动AI智能伴侣.bat`，窗口里刷出一堆 `'浠跺彜閲屻€?' 不是内部或外部命令`？**
+本地改过 bat、用编辑器另存时把它存成了 UTF-8 或 LF 行尾。cmd 只认 **GBK + CRLF**，
+否则会把好几行拼成一条命令、把中文按 GBK 解码成乱码。修：
+
+```powershell
+python scripts/fix_bat_encoding.py
+```
 
 **Q：提示端口被占用？**
 换个端口：`set AI_PARTNER_PORT=8600` 再启动；或关掉占用 8501 的进程。
