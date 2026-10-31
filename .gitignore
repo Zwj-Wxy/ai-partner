@@ -28,3 +28,6 @@ sessions/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 打包日志
+*.log.build_log.txt
