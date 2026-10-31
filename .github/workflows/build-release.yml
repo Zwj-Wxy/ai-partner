@@ -84,6 +84,8 @@ jobs:
           Remove-Item dist\AI智能伴侣\sessions -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item dist\AI智能伴侣\config.json -Force -ErrorAction SilentlyContinue
           Copy-Item packaging\*.bat dist\AI智能伴侣\ -Force
+          Copy-Item packaging\*.ps1 dist\AI智能伴侣\ -Force
+          Copy-Item assets\app.ico dist\AI智能伴侣\ -Force
           Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
           Get-ChildItem dist\AI智能伴侣 | Select-Object Name, Length
 

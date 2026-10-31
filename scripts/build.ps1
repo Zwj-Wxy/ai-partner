@@ -1,4 +1,4 @@
-﻿# 一键打包 AI 智能伴侣为 Windows 绿色版
+# 一键打包 AI 智能伴侣为 Windows 绿色版
 # 用法： powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # 参数： -SkipInstall 跳过创建虚拟环境/安装依赖   -NoZip 不生成 zip
 
@@ -45,9 +45,11 @@ if (Test-Path 'dist') { Remove-Item 'dist' -Recurse -Force }
 & $venvPython -m PyInstaller --noconfirm --clean app.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 
-# 4. 附带启动脚本与说明书
+# 4. 附带启动脚本、快捷方式工具、图标与说明书
 $outDir = Join-Path $root 'dist\AI智能伴侣'
 Copy-Item (Join-Path $root 'packaging\*.bat') $outDir -Force
+Copy-Item (Join-Path $root 'packaging\*.ps1') $outDir -Force
+Copy-Item (Join-Path $root 'assets\app.ico') $outDir -Force
 Copy-Item (Join-Path $root 'docs\使用说明.md') $outDir -Force
 
 # 5. 完整性自检：少了 streamlit 的元数据/前端资源，包就是打不开或白屏

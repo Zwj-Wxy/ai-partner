@@ -9,6 +9,11 @@
 import os
 import sys
 
+# Windows 控制台默认 GBK，打印 ✓/🔑 会 UnicodeEncodeError，统一按 utf-8 输出
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 

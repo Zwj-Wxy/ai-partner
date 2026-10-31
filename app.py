@@ -90,13 +90,17 @@ def _pick_sessions_dir() -> str:
 CONFIG_FILE = os.path.join(_data_home(), "config.json")
 SESSIONS_DIR = _pick_sessions_dir()
 
+# 窗口/标签页图标：有图就用图（独立窗口的任务栏图标就是它），没有就退回 emoji
+_ICON_FILE = resource_path(os.path.join("resources", "app-icon.png"))
+PAGE_ICON = _ICON_FILE if os.path.exists(_ICON_FILE) else "🤖"
+
 
 # --------------------------------------------------------------------------
 # 页面配置（必须是第一个 Streamlit 调用）
 # --------------------------------------------------------------------------
 st.set_page_config(
     page_title=APP_TITLE,
-    page_icon="🤖",
+    page_icon=PAGE_ICON,
     layout="wide",
     initial_sidebar_state="expanded",
 )

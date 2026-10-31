@@ -6,6 +6,8 @@ PyInstaller 打包配置（onedir 模式，产物在 dist/AI智能伴侣/）
     pyinstaller --noconfirm --clean app.spec
 """
 
+import os
+
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 # ---------------------------------------------------------------- 资源文件
@@ -81,13 +83,13 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,          # 保留控制台，出错时能看到日志
+    console=False,         # 不弹黑窗口，像个正常软件；启动失败由 launcher 弹窗 + 写启动日志.txt
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,             # 想换图标：放一个 app.ico 到根目录，改成 "app.ico"
+    icon="assets/app.ico" if os.path.exists("assets/app.ico") else None,
 )
 
 coll = COLLECT(

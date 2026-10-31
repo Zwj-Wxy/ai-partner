@@ -31,6 +31,9 @@ CHECKS = [
     ("主程序 exe", "AI智能伴侣.exe", True, "整个包没有入口"),
     ("应用入口 app.py", "_internal/app.py", True, "启动即报找不到 app.py"),
     ("静态资源 resources/", "_internal/resources", True, "logo 等资源缺失"),
+    ("窗口图标", "_internal/resources/app-icon.png", True, "窗口/任务栏显示默认图标"),
+    ("快捷方式图标", "app.ico", True, "桌面快捷方式没有图标"),
+    ("创建快捷方式脚本", "创建桌面快捷方式.ps1", True, "用户没法一键建桌面图标"),
     ("Streamlit 前端静态文件", "_internal/streamlit/static/index.html", True,
      "服务能起来但浏览器白屏（JS/CSS 404）"),
     ("Streamlit 元数据", "_internal/streamlit-*.dist-info", True,
@@ -72,8 +75,17 @@ def _describe_metadata(path: str) -> str:
 def _run_self_check(exe_path: str, cwd: str) -> tuple:
     """让 exe 以自检模式跑一遍（launcher.py 的 AI_PARTNER_SELFCHECK），
     返回 (是否通过, 说明)。这是唯一能验证“包里的第三方模块真能 import”的办法。
+
+    exe 现在是窗口模式（没有控制台），stdout 收不到东西，所以结果走一个临时文件。
     """
-    env = dict(os.environ, AI_PARTNER_SELFCHECK="1")
+    out_path = os.path.join(ROOT, ".selfcheck.txt")
+    try:
+        if os.path.exists(out_path):
+            os.remove(out_path)
+    except OSError:
+        pass
+
+    env = dict(os.environ, AI_PARTNER_SELFCHECK="1", AI_PARTNER_SELFCHECK_OUT=out_path)
     try:
         proc = subprocess.run(
             [exe_path],
@@ -88,13 +100,22 @@ def _run_self_check(exe_path: str, cwd: str) -> tuple:
     except OSError as exc:
         return False, f"起不来：{exc}"
 
-    raw = (proc.stdout or b"") + (proc.stderr or b"")
-    for encoding in ("utf-8", "gbk"):
+    text = ""
+    if os.path.exists(out_path):
         try:
-            text = raw.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            text = raw.decode("utf-8", "replace")
+            with open(out_path, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            text = ""
+
+    if not text:
+        raw = (proc.stdout or b"") + (proc.stderr or b"")
+        for encoding in ("utf-8", "gbk"):
+            try:
+                text = raw.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                text = raw.decode("utf-8", "replace")
 
     if "SELFCHECK OK" in text:
         detail = text.split("SELFCHECK OK", 1)[1].strip().splitlines()[0]
