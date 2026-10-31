@@ -1,4 +1,4 @@
-# 一键打包 AI 智能伴侣为 Windows 绿色版
+﻿# 一键打包 AI 智能伴侣为 Windows 绿色版
 # 用法： powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # 参数： -SkipInstall 跳过创建虚拟环境/安装依赖   -NoZip 不生成 zip
 
