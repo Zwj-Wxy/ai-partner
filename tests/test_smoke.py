@@ -14,6 +14,14 @@ import shutil
 import sys
 import types
 
+# CI 的 Windows 机器是英文系统（控制台 cp1252），打印中文/emoji 会
+# UnicodeEncodeError: 'charmap' codec can't encode —— 先把输出统一成 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 

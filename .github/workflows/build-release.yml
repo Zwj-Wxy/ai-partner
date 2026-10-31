@@ -35,11 +35,16 @@ jobs:
         run: python -m py_compile app.py launcher.py
 
       - name: Smoke test
+        env:
+          # runner 是英文 Windows（cp1252），不设这个打印中文就 UnicodeEncodeError
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
         run: python tests/test_smoke.py
 
       - name: App test（用真 Streamlit 渲染一遍）
         env:
           PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
         run: python tests/test_apptest.py
 
       - name: Build with PyInstaller
