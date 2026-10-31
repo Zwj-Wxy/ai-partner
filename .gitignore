@@ -12,7 +12,14 @@ env/
 # 打包产物
 build/
 dist/
+dist_tmp/
+build_tmp/
 *.zip
+
+# 打包日志
+*.log
+.build_log.txt
+run.log
 
 # 本地配置与隐私数据（绝对不要提交！）
 config.json
@@ -21,6 +28,7 @@ sessions/
 
 # 测试临时目录
 .smoke_tmp/
+.runtest/
 
 # 编辑器 / 系统
 .vscode/
@@ -28,6 +36,3 @@ sessions/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# �����־
-*.log.build_log.txt
