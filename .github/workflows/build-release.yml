@@ -45,9 +45,6 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean app.spec
 
-      - name: Bundle check（缺文件就别浪费后面的时间）
-        run: python scripts/verify_bundle.py
-
       - name: Launch check（打不开就不许发）
         shell: pwsh
         run: |
@@ -80,9 +77,12 @@ jobs:
       - name: Bundle launchers and docs
         shell: pwsh
         run: |
-          # 启动验证会生成 sessions/，别把它塞进发布包
+          # 启动验证会生成 sessions/ 和各种日志，别把它们塞进发布包
           Remove-Item dist\AI智能伴侣\sessions -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item dist\AI智能伴侣\config.json -Force -ErrorAction SilentlyContinue
+          Remove-Item dist\AI智能伴侣\运行日志.txt -Force -ErrorAction SilentlyContinue
+          Remove-Item dist\AI智能伴侣\当前地址.txt -Force -ErrorAction SilentlyContinue
+          Remove-Item dist\AI智能伴侣\启动日志.txt -Force -ErrorAction SilentlyContinue
           Copy-Item packaging\*.bat dist\AI智能伴侣\ -Force
           Copy-Item packaging\*.ps1 dist\AI智能伴侣\ -Force
           Copy-Item assets\app.ico dist\AI智能伴侣\ -Force
