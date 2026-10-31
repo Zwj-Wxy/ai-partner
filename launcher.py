@@ -123,11 +123,38 @@ def find_browser() -> str:
 
 
 def _window_profile_dir() -> str:
-    """独立窗口用单独的用户配置目录：不污染用户自己的浏览器，关掉就是干净的。"""
+    """独立窗口用单独的用户配置目录：不污染用户自己的浏览器，关掉就是干净的。
+
+    **必须先建好目录**：Chromium 只会在已存在的目录里创建 ProcessSingleton 锁文件，
+    父目录不存在时它会报 `Lock file can not be created! Error code: 5` 然后直接退出，
+    用户看到的就是"双击了窗口没出来"。
+    """
     base = (os.environ.get("AI_PARTNER_HOME") or "").strip() or os.path.join(
         os.path.expanduser("~"), ".ai_partner"
     )
-    return os.path.join(base, "browser")
+    path = os.path.join(base, "browser")
+    if _ensure_dir(path):
+        return path
+
+    # 家里目录写不了（权限/只读配置）就退到临时目录，至少还能开出窗口
+    import tempfile
+
+    try:
+        path = os.path.join(tempfile.mkdtemp(prefix="ai_partner_browser_"), "browser")
+    except OSError:
+        return os.path.join(tempfile.gettempdir(), "ai_partner_browser")
+    _ensure_dir(path)
+    return path
+
+
+def _ensure_dir(path: str) -> bool:
+    import os
+
+    try:
+        os.makedirs(path, exist_ok=True)
+        return True
+    except OSError:
+        return False
 
 
 def _find_app_window(before: set, url: str, title_hint: str = "", timeout: float = 15.0) -> int:
