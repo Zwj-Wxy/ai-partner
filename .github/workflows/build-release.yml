@@ -89,6 +89,18 @@ jobs:
           Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
           Get-ChildItem dist\AI智能伴侣 | Select-Object Name, Length
 
+      - name: Build window host（自带 WebView2 小窗口）
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_window_host.ps1 -Python python
+          if (-not (Test-Path "assets\window_host\AI伴侣窗口.exe")) {
+            throw "窗口宿主没编译出来（用户双击后只会看到浏览器标签页）"
+          }
+          Copy-Item assets\window_host\* dist\AI智能伴侣\ -Force
+
+      - name: Verify final bundle（打包前的最后一道闸）
+        run: python scripts/verify_bundle.py
+
       - name: Create zip
         shell: pwsh
         run: |

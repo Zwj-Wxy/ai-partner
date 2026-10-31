@@ -15,6 +15,9 @@ dist/
 dist_tmp/
 build_tmp/
 *.zip
+# 窗口宿主的编译产物（源码是 window_host/WindowHost.cs，构建时用 csc 现编）
+assets/window_host/
+webview-data/
 
 # 打包日志
 *.log

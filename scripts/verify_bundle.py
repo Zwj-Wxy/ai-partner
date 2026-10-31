@@ -41,6 +41,10 @@ CHECKS = [
      "启动即崩：PackageNotFoundError: No package metadata was found for streamlit"),
     ("Altair 元数据", "_internal/altair-*.dist-info", False, "图表功能可能报版本错误"),
     ("OpenAI SDK 元数据", "_internal/openai-*.dist-info", False, "一般不影响（SDK 版本号是写死的）"),
+    ("窗口宿主", "AI伴侣窗口.exe", True,
+     "双击后只能退回浏览器标签页，不像一个软件"),
+    ("WebView2 加载器", "WebView2Loader.dll", True, "窗口宿主起不来"),
+    ("WebView2 托管库", "Microsoft.Web.WebView2.Core.dll", True, "窗口宿主起不来"),
     ("OpenAI SDK 模块", "_internal/openai/__init__.py", True,
      "页面里报 ModuleNotFoundError: No module named 'openai'（app.py 是数据文件，静态分析看不到它的 import）"),
     # 注意：httpx 这类纯 Python 依赖被打进 exe 内部的 PYZ 归档，不会出现在 _internal/ 里，

@@ -37,7 +37,11 @@ if (-not (Test-Path $venvPython)) { $venvPython = 'python' }
 Write-Host "==> 语法检查" -ForegroundColor Cyan
 & $venvPython -m py_compile app.py launcher.py
 
-# 3. 清理旧产物并打包
+# 3. 编译窗口宿主（WebView2 小窗口，双击 exe 看到的就是它）
+Write-Host "==> 编译窗口宿主" -ForegroundColor Cyan
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\build_window_host.ps1') -Python $venvPython
+
+# 4. 清理旧产物并打包
 Write-Host "==> PyInstaller 打包（约 1-3 分钟）" -ForegroundColor Cyan
 if (Test-Path 'build') { Remove-Item 'build' -Recurse -Force }
 if (Test-Path 'dist') { Remove-Item 'dist' -Recurse -Force }
@@ -45,12 +49,15 @@ if (Test-Path 'dist') { Remove-Item 'dist' -Recurse -Force }
 & $venvPython -m PyInstaller --noconfirm --clean app.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 
-# 4. 附带启动脚本、快捷方式工具、图标与说明书
+# 5. 附带启动脚本、快捷方式工具、图标、窗口宿主与说明书
 $outDir = Join-Path $root 'dist\AI智能伴侣'
 Copy-Item (Join-Path $root 'packaging\*.bat') $outDir -Force
 Copy-Item (Join-Path $root 'packaging\*.ps1') $outDir -Force
 Copy-Item (Join-Path $root 'assets\app.ico') $outDir -Force
 Copy-Item (Join-Path $root 'docs\使用说明.md') $outDir -Force
+if (Test-Path (Join-Path $root 'assets\window_host')) {
+    Copy-Item (Join-Path $root 'assets\window_host\*') $outDir -Force
+}
 
 # 5. 完整性自检：少了 streamlit 的元数据/前端资源，包就是打不开或白屏
 Write-Host "==> 检查产物完整性" -ForegroundColor Cyan

@@ -14,7 +14,7 @@ WINDOW_TITLE_HINT = "AI智能伴侣"
 
 # 改动 launcher 时就把它 +1，打包校验会比对 exe 自检里报出来的这个号，
 # 防止「源码修好了、发出去的还是旧 exe」这种事故（这已经发生过一次）。
-LAUNCHER_VERSION = "2026.10.31.4"
+LAUNCHER_VERSION = "2026.10.31.9"
 
 
 def _app_sha8() -> str:
@@ -222,7 +222,10 @@ def _find_app_window(before: set, url: str, title_hint: str = "", timeout: float
     deadline = time.time() + timeout
     while time.time() < deadline:
         for hwnd, _pid, title, cls in _visible_windows():
-            if hwnd in before or not cls.startswith("Chrome_WidgetWin"):
+            if hwnd in before:
+                continue
+            # 浏览器应用窗口的类名是 Chrome_WidgetWin*；我们自己的窗口宿主是 WindowsForms10.*
+            if not (cls.startswith("Chrome_WidgetWin") or cls.startswith("WindowsForms")):
                 continue
             if token and token in title:
                 return hwnd
@@ -343,60 +346,97 @@ def _visible_windows():
     return results
 
 
-def open_app_window(url: str, title_hint: str = "") -> bool:
-    """以「应用窗口」方式打开：没有地址栏、没有标签页、独立任务栏图标，看起来就是个软件。
-
-    打不开（没装 Edge/Chrome、或浏览器拒绝）就退回浏览器标签页，
-    总之不能出现"双击了但什么都没发生"。
-    """
+def _launch_app_window(url: str, profile: str):
+    """启动一个浏览器「应用窗口」，返回 Popen。"""
     import subprocess
-    import webbrowser
-
-    if os.environ.get("AI_PARTNER_WINDOW", "1") == "0":
-        _open_in_browser(url)
-        return False
-
-    browser = find_browser()
-    if not browser:
-        print("[提示] 没找到 Edge/Chrome，改用默认浏览器打开。")
-        _open_in_browser(url)
-        return False
 
     args = [
-        browser,
+        find_browser(),
         "--app=" + url,
         "--window-size=1180,860",
-        "--user-data-dir=" + _window_profile_dir(),
+        "--user-data-dir=" + profile,
         "--no-first-run",
         "--no-default-browser-check",
         "--no-service-autorun",
         "--disable-features=Translate",
     ]
-    before = set(hwnd for hwnd, _pid, _title, _cls in _visible_windows())
-    try:
-        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError as exc:
-        print(f"[提示] 独立窗口打开失败（{exc}），改用默认浏览器。")
-        _open_in_browser(url)
-        return False
+    _dbg(f"开应用窗口：{args[0]} --app={url} (profile={profile})")
+    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    hwnd = _find_app_window(before, url, title_hint)
-    if hwnd:
-        _decorate_window(hwnd, title_hint or WINDOW_TITLE_HINT)
-        _focus_window(hwnd)
-        return True
 
-    # 没等到窗口：多半是浏览器以管理员权限在跑，拒绝了这个请求
-    print(
-        "[提示] 独立窗口没能打开（浏览器可能正以管理员权限运行），这次改用浏览器标签页。\n"
-        "       想要独立窗口：把浏览器窗口全部关掉，再双击「启动AI智能伴侣」。"
-    )
-    try:
-        proc.terminate()
-    except OSError:
-        pass
-    _open_in_browser(url)
+def _wait_page_loaded(hwnd: int, timeout: float = 20.0) -> bool:
+    """等页面真正渲染出来——判据是窗口标题从 `localhost_/` 变成「AI智能伴侣」。
+
+    实测：冷启动时 Edge 会先开出一个白窗口（标题 `localhost_/`），
+    页面加载完标题才会变成页面自己的标题。白窗口摆在那里最像"没反应"，
+    所以必须验证一次，没加载出来就当这次没成功。
+    """
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for h, _pid, title, _cls in _visible_windows():
+            if h == hwnd:
+                if WINDOW_TITLE_HINT in title:
+                    return True
+                break
+        time.sleep(0.4)
     return False
+
+
+def open_app_window(url: str, title_hint: str = "") -> int:
+    """以「应用窗口」方式打开：没有地址栏、没有标签页、独立任务栏图标，看起来就是个软件。
+
+    成功返回窗口句柄（>0）；失败返回 0，由调用方决定改用浏览器——
+    这里不自己去开浏览器，避免同一个页面被打开两次。
+
+    实测有概率开出白窗口（冷启动页面还没加载完），所以：
+      1. 第一次用正式配置目录开；
+      2. 20 秒内标题还没变成「AI智能伴侣」，就关掉它、换一个全新配置目录再开一次；
+      3. 还不行就返回 0，让调用方退到默认浏览器 / 弹窗。
+    宁可多重试一次，也不要给用户留一个白窗口。
+    """
+    if os.environ.get("AI_PARTNER_WINDOW", "1") == "0":
+        return 0
+
+    if not find_browser():
+        _dbg("没找到 Edge/Chrome，无法开应用窗口")
+        return 0
+
+    base_profile = _window_profile_dir()
+    for attempt, profile in enumerate((base_profile, base_profile + "_2"), start=1):
+        try:
+            os.makedirs(profile, exist_ok=True)
+        except OSError:
+            continue
+        before = set(hwnd for hwnd, _pid, _title, _cls in _visible_windows())
+        try:
+            proc = _launch_app_window(url, profile)
+        except OSError as exc:
+            _dbg(f"应用窗口进程起不来：{exc}")
+            return 0
+
+        hwnd = _find_app_window(before, url, title_hint)
+        if hwnd and _wait_page_loaded(hwnd):
+            _decorate_window(hwnd, title_hint or WINDOW_TITLE_HINT)
+            _focus_window(hwnd)
+            return hwnd
+
+        _dbg(f"第 {attempt} 次应用窗口没成功（hwnd={hwnd}），关掉重试")
+        if hwnd:
+            try:
+                import ctypes
+
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+            except Exception:
+                pass
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+
+    _dbg("两次应用窗口都没成功，改用浏览器")
+    return 0
 
 
 def _open_in_browser(url: str) -> bool:
@@ -679,7 +719,16 @@ def main() -> None:
                 f"详细日志：{log_path}"
             )
         _dbg("后台服务已就绪，开始打开窗口")
-        _show_window(f"http://localhost:{port}", mode)
+        hwnd = _show_window(f"http://localhost:{port}", mode)
+        if hwnd:
+            # 关键：窗口开出来之后**不能马上退出**，否则 finally 会把服务杀掉，
+            # 用户看到的就是一个白屏窗口（页面还没加载完，后端已经没了）。
+            _dbg(f"窗口已打开（hwnd={hwnd}），服务保持运行，等窗口关闭")
+            _wait_window_closed(hwnd, child)
+            _dbg("窗口已关闭，关掉后台服务")
+        else:
+            _dbg("没拿到窗口句柄（走的是浏览器/弹窗），服务保持运行直到被结束")
+            _keep_alive_until_child_exits(child)
     finally:
         try:
             child.terminate()
@@ -689,6 +738,35 @@ def main() -> None:
             log_handle.close()
         except OSError:
             pass
+
+
+def _wait_window_closed(hwnd: int, child, poll: float = 0.5) -> None:
+    """等这个窗口被用户关掉（或者后台服务自己退出）。"""
+    import time
+
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    while True:
+        try:
+            if not user32.IsWindow(hwnd):
+                return
+        except Exception:
+            return
+        if child.poll() is not None:
+            return
+        time.sleep(poll)
+
+
+def _keep_alive_until_child_exits(child, poll: float = 0.5) -> None:
+    """浏览器模式：窗口句柄拿不到，就一直陪着后台服务，直到它退出。
+
+    用户双击 `停止AI智能伴侣.bat`（或任务管理器结束进程）就会把两个进程一起收掉。
+    """
+    import time
+
+    while child.poll() is None:
+        time.sleep(poll)
 
 
 def subprocess_devnull():
@@ -709,62 +787,150 @@ def subprocess_popen(command: list, cwd: str, env: dict, log_handle):
     )
 
 
-def _show_window(url: str, mode: str = "") -> None:
-    """按优先级把界面送到用户眼前。
+def _show_window(url: str, mode: str = "") -> int:
+    """按优先级把界面送到用户眼前，返回打开的应用窗口句柄（没有就是 0）。
 
     实测结论（2026-10-31，Edge 156）：
       * 原生窗口（pywebview + WebView2）在**源码模式**下完美，但打包成 exe 后
         pythonnet 加载 .NET 运行时会失败，用户机器上大概率起不来；
-      * Edge 的 `--app=<url>` 在这种版本的 Edge 上会把端口丢掉（标题变成
-        `localhost_/`，实际访问 http://localhost 的 80 端口 → 白屏 / 拒绝连接）。
-    所以默认走最稳的那条：系统默认浏览器。想试新窗口可以设
-    AI_PARTNER_WINDOW=native（原生窗口）或 =edge（Edge 应用窗口）。
+      * Edge/Chrome 的 `--app=<url>` 应用窗口**能正常用**：没有地址栏、没有标签页、
+        任务栏是它自己的图标，页面加载完后标题会变成「AI智能伴侣」。
+        前提是必须给它一个**已经存在**的 `--user-data-dir`（否则 Chromium 建锁文件失败直接退出），
+        这样也不会被用户那个"管理员权限的 Edge"挡住。
+    所以默认先试应用窗口，实在不行再退回系统默认浏览器，最后再弹窗给地址。
+
+    返回值交给 main()：拿到句柄就一直陪着窗口，窗口关掉才收工——
+    否则服务会先被杀掉，用户看到的是一个白屏窗口。
     """
     write_current_url(url)
 
-    icon = os.path.join(bundle_dir(), "app.ico")
+    # 窗口/任务栏图标：优先用程序目录里的 app.ico（打包时放在 exe 旁边），
+    # 源码模式退到 assets\\app.ico，都没有就交给系统默认图标。
+    icon = ""
+    for candidate in (
+        os.path.join(app_dir(), "app.ico"),
+        os.path.join(bundle_dir(), "app.ico"),
+        os.path.join(bundle_dir(), "assets", "app.ico"),
+    ):
+        if os.path.exists(candidate):
+            icon = candidate
+            break
 
     if mode == "native":
         if _native_window(url, icon):
-            return
-        _dbg("原生窗口不可用，改用浏览器")
-    elif mode == "edge":
-        if open_app_window(url, WINDOW_TITLE_HINT):
-            return
-        _dbg("Edge 应用窗口不可用，改用浏览器")
+            return 0
+        _dbg("pywebview 原生窗口不可用，继续尝试其它方式")
+    elif mode == "browser":
+        pass  # 用户显式要求用默认浏览器，跳过所有独立窗口
+    else:
+        # 默认：先用自己的 WebView2 窗口宿主（最像软件，也最稳）
+        hwnd = _open_window_host(url, icon)
+        if hwnd:
+            _dbg("窗口宿主已打开")
+            return hwnd
+        # 再退一档：Edge/Chrome 的应用窗口
+        hwnd = open_app_window(url, WINDOW_TITLE_HINT)
+        if hwnd:
+            _dbg("Edge 应用窗口已打开")
+            return hwnd
+        _dbg("应用窗口不可用，改用默认浏览器")
 
-    # 默认 / 兜底：直接交给系统默认浏览器（100% 能显示，只是带地址栏和标签页）
+    # 兜底：直接交给系统默认浏览器（带地址栏和标签页，但 100% 是用户熟悉的东西）
     _dbg(f"用默认浏览器打开：{url}")
     before = set(hwnd for hwnd, _pid, _title, _cls in _visible_windows())
     _open_in_browser(url)
-    if _wait_new_browser_window(before, timeout=12.0):
+    token = _origin_token(url)
+    if _wait_new_browser_window(before, timeout=12.0, token=token):
         _dbg("浏览器窗口已打开")
-        return
+        return 0
 
     # 12 秒都没等到新窗口：最常见的原因是浏览器正以【管理员权限】运行，
     # 普通权限的程序没法让它开窗口（Windows 的权限隔离），这时给个明白的弹窗，
     # 而不是让用户对着"什么都没发生"发呆。
     _dbg("12 秒内没有出现新的浏览器窗口")
     _fatal(
-        "服务已经启动好了，但没能打开浏览器窗口。\n\n"
+        "服务已经启动好了，但没能把界面打开。\n\n"
         f"可以手动把这个地址复制到浏览器里打开：\n{url}\n\n"
         "为什么会这样？最常见的原因是你的浏览器（Edge/Chrome）正以【管理员权限】运行，\n"
         "普通权限的程序没法让它开新窗口。解决办法任选一个：\n"
         "  1. 右键「AI智能伴侣.exe」→「以管理员身份运行」；\n"
         "  2. 把上面这个地址直接粘贴到浏览器地址栏。"
     )
+    return 0
 
 
-def _wait_new_browser_window(before: set, timeout: float = 12.0) -> bool:
-    """等一个新的浏览器窗口出现（浏览器被管理员权限卡住时就等不到）。"""
+def _host_exe() -> str:
+    """窗口宿主 exe 的路径（打包后在程序目录，源码模式下在 assets\\window_host）。"""
+    name = "AI伴侣窗口.exe"
+    for base in (app_dir(), os.path.join(bundle_dir(), "window_host"), os.path.join(bundle_dir(), "assets", "window_host")):
+        candidate = os.path.join(base, name)
+        if os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def _open_window_host(url: str, icon: str) -> int:
+    """用自带的小窗口宿主（WinForms + WebView2）打开界面。
+
+    为什么用这个而不是 pywebview：pythonnet 在 PyInstaller 打包后加载 .NET
+    运行时会失败；而这个几十 KB 的小 exe 只用 .NET Framework 自带的
+    WinForms + WebView2，稳得多，窗口标题/图标也都是我们自己的。
+
+    返回窗口句柄；没成功返回 0（由调用方继续往后退）。
+    """
+    import subprocess
+
+    host = _host_exe()
+    if not host:
+        _dbg("没有窗口宿主 exe，跳过")
+        return 0
+
+    before = set(hwnd for hwnd, _pid, _title, _cls in _visible_windows())
+    _dbg(f"启动窗口宿主：{host} {url}")
+    try:
+        subprocess.Popen(
+            [host, url, WINDOW_TITLE_HINT, icon],
+            cwd=os.path.dirname(host),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        _dbg(f"窗口宿主起不来：{exc}")
+        return 0
+
+    hwnd = _find_app_window(before, url, WINDOW_TITLE_HINT)
+    if hwnd and _wait_page_loaded(hwnd, timeout=25.0):
+        _focus_window(hwnd)
+        return hwnd
+    _dbg(f"窗口宿主没成功（hwnd={hwnd}）")
+    if hwnd:
+        try:
+            import ctypes
+
+            ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+        except Exception:
+            pass
+    return 0
+
+
+def _wait_new_browser_window(before: set, timeout: float = 12.0, token: str = "") -> bool:
+    """等一个新的**属于我们**的浏览器窗口出现。
+
+    只看"有没有新的 Chrome_WidgetWin"会误判：系统里任何 Edge/Chrome 弹个
+    翻译气泡、通知窗口都会命中，结果就是"以为打开了、其实用户什么都没看到"。
+    所以要求标题里带 origin 记号（`localhost_`）、或含「AI智能伴侣」。
+    """
     import time
 
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for hwnd, _pid, _title, cls in _visible_windows():
-            if hwnd in before:
+        for hwnd, _pid, title, cls in _visible_windows():
+            if hwnd in before or not cls.startswith("Chrome_WidgetWin"):
                 continue
-            if cls.startswith("Chrome_WidgetWin"):
+            if token and token in title:
+                return True
+            if WINDOW_TITLE_HINT in title:
                 return True
         time.sleep(0.5)
     return False

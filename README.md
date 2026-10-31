@@ -14,7 +14,7 @@
 | 特性 | 说明 |
 | --- | --- |
 | 💬 拟人化对话 | 自定义昵称 + 性格，模型全程代入伴侣角色，回复短、像微信聊天 |
-| 🪟 不像网页 | 双击 exe 就起服务并自动打开界面；也可以开无地址栏的独立窗口（实验性） |
+| 🪟 独立窗口 | 双击就开始：一个没有地址栏、没有标签页的原生窗口，标题「AI智能伴侣」、爱心图标 |
 | ⚡ 流式输出 | 回复逐字显示，不用干等 |
 | 🗂 多会话管理 | 新建 / 切换 / 删除会话，自动保存到本地 `sessions/*.json` |
 | 🔑 密钥自管理 | 环境变量、界面输入、本地 `config.json` 三种方式，密钥不出本机 |
@@ -40,21 +40,20 @@
 
 不想安装也行：直接双击 `启动AI智能伴侣.bat` 也能用，只是每次都要先进文件夹。
 
-> **界面开在哪**：默认交给**系统默认浏览器**（Edge/Chrome 的普通标签页），
-> 同时把地址写进程序目录的 `当前地址.txt`，随时可以复制到别的浏览器。
-> 等 12 秒还没把浏览器叫起来，程序会**弹一个提示框**直接给出手动地址，不会让你对着"什么都没发生"发呆。
+> **界面开在哪**：一个**独立窗口**——没有地址栏、没有标签页，标题写「AI智能伴侣」，
+> 任务栏图标是粉色爱心，看起来就是个软件。这个窗口由包内自带的 `AI伴侣窗口.exe`
+> （一个几十 KB 的 WinForms + WebView2 小宿主，源码在 `window_host/WindowHost.cs`）打开，
+> 不依赖你平时用的浏览器，也不会被"以管理员权限运行的 Edge"挡住。
 >
-> **"双击没反应"最常见的原因**：你的浏览器正以【管理员权限】运行，Windows 不允许普通权限的程序
-> 让它开新窗口。两个办法任选：右键 `AI智能伴侣.exe` →「以管理员身份运行」，
-> 或者把弹窗里的地址复制到浏览器地址栏。
+> **万一窗口没弹出来**：程序会先把地址写进程序目录的 `当前地址.txt`，弹窗也会直接给这个地址，
+> 复制到任意浏览器都能用。常见原因是杀毒软件拦了这个自带窗口程序、或系统缺 WebView2 运行时
+> （Win10/11 一般自带，Edge 能打开就有）。这时程序会自动退回「浏览器标签页」，聊天不受影响。
 >
-> **想更"像软件"（无地址栏的独立窗口）**：程序留了两条路，但目前都不够稳，默认没开——
-> `AI_PARTNER_WINDOW=edge` 走 Edge `--app` 应用模式（实测某些 Edge 版本会把端口丢掉、白屏），
-> `AI_PARTNER_WINDOW=native` 走 WebView2 原生窗口（源码下完美，打包成 exe 后 pythonnet 加载 .NET 运行时失败）；
-> 两条路失败都会自动退回浏览器，不会卡死。
+> **两个可选开关**（一般不用管，用不成会自动往后退）：
+> `AI_PARTNER_WINDOW=browser` 强制用默认浏览器；`AI_PARTNER_WINDOW=native` 改用 pywebview 原生窗口。
 >
 > 端口默认 8501，被占用会自动避让到 8502、8503……；地址随实际端口变化。
-> 关掉浏览器页面不等于退出服务——双击 `停止AI智能伴侣.bat` 才是彻底退出。
+> 关掉窗口，后台服务跟着停；想彻底退出也可以双击 `停止AI智能伴侣.bat`。
 
 ### 方式三：从源码运行（开发者）
 
@@ -145,22 +144,35 @@ Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
 > LF 行尾会被 cmd 当成一条超长命令、UTF-8 的中文会被按 GBK 解码，
 > 用户双击就看到一串 `'浠跺彜閲屻€?' 不是内部或外部命令`。
 > `python scripts/fix_bat_encoding.py` 可一键修正，`verify_bundle.py` 也会把它拦下来。
+> `.ps1` 同理必须是 **UTF-8 带 BOM + CRLF**，否则 PowerShell 5.1 按 GBK 解码，
+> 中文乱码会把引号打断，报「字符串缺少终止符」。**用编辑器改过 .ps1 后一定要重跑一次这个脚本。**
+
+> **为什么界面不是浏览器标签页**：Streamlit 本质是个网页，想要"像软件"，就得有个自己的窗口。
+> 试过的三条路：pywebview（源码模式完美，打包后 pythonnet 加载 .NET 运行时失败）、
+> Edge `--app` 应用窗口（能用，但冷启动时经常先给一个白窗口，标题一直是 `localhost_/`）、
+> 最后选了**自己写的几十 KB 窗口宿主**：`window_host/WindowHost.cs` 用 .NET Framework 自带的
+> WinForms + WebView2 编译成 `AI伴侣窗口.exe`（`scripts/build_window_host.ps1` 负责编译，
+> 用 .NET 4.x 自带的 `csc.exe`，不需要装 Visual Studio）。
+> 另有一个坑：窗口开出来后**父进程不能马上退出**——否则 `finally` 会把后台服务杀掉，
+> 用户看到的就是一个白屏窗口。`launcher.py` 因此会一直陪到窗口被关掉。
 
 > 实测记录（2026-10-31）：Python 3.13.9 + Streamlit 1.66.0 + PyInstaller 6.22.3 打包，
 > exe（`console=False`，带图标）启动后 `http://127.0.0.1:8517` 返回 200、`_stcore/health` 返回 `ok`，
-> `AppTest` 三种情形均无异常，`verify_bundle.py` 21 项全绿。
+> `AppTest` 三种情形均无异常，`verify_bundle.py` 30 项全绿；
+> 模拟双击桌面图标 → **17 秒**后独立窗口弹出（标题「AI智能伴侣」、爱心图标）、页面渲染完整、`health` 返回 `ok`。
 
 产物结构（约 244 MB，PyInstaller **onedir 模式**，比 onefile 启动快很多）：
 
 ```
 dist/AI智能伴侣/
 ├── AI智能伴侣.exe        # 主程序（窗口模式，无控制台）
+├── AI伴侣窗口.exe        # 独立窗口宿主（WebView2）+ 3 个 dll，黑窗口的替代品
 ├── 安装AI智能伴侣.bat    # 双击一次，装成桌面程序（图标 + 开始菜单 + 卸载项）
 ├── 安装到本机.ps1        # 安装脚本本体（-Uninstall 反向清理）
 ├── 启动AI智能伴侣.bat    # 不安装时直接启动
 ├── 停止AI智能伴侣.bat    # 彻底退出
 ├── 排查问题.bat          # 一键诊断，生成 排查结果.txt
-├── app.ico               # exe / 快捷方式图标
+├── app.ico               # exe / 快捷方式 / 窗口图标
 ├── 使用说明.md
 └── _internal/            # 依赖，别删、别单独拷走 exe
 ```
@@ -251,7 +263,8 @@ ai_partner/
 ├── requirements.txt            # 运行依赖
 ├── requirements-build.txt      # 打包依赖
 ├── resources/                  # 静态资源（logo 等）
-├── packaging/                  # 提供给最终用户的启动/停止/排查脚本
+├── window_host/WindowHost.cs   # 独立窗口宿主源码（WinForms + WebView2，编译成 AI伴侣窗口.exe）
+├── packaging/                  # 提供给最终用户的启动/停止/排查/安装脚本
 ├── docs/使用说明.md            # 给最终用户看的说明书
 ├── docs/banner.png             # README 横幅
 ├── docs/original/05.ai_partner_4.py  # 最初那份单文件源码（存档）
@@ -259,8 +272,9 @@ ai_partner/
 ├── tests/test_apptest.py       # 真 Streamlit 的 AppTest 渲染测试
 ├── .streamlit/config.toml      # 主题与运行参数
 ├── scripts/build.ps1           # 一键打包脚本
-├── scripts/verify_bundle.py    # 产物完整性检查（缺 static/元数据就报错）
-├── scripts/fix_bat_encoding.py # 把 .bat 统一成 GBK + CRLF（否则 cmd 乱码）
+├── scripts/build_window_host.ps1 # 编译窗口宿主（用系统自带 csc.exe，不用装 VS）
+├── scripts/verify_bundle.py    # 产物完整性检查（缺 static/元数据/窗口宿主就报错）
+├── scripts/fix_bat_encoding.py # 把 .bat/.ps1 统一成正确编码（否则 cmd/PowerShell 乱码）
 ├── scripts/make_banner.py      # 重新生成横幅
 └── .github/workflows/
     └── build-release.yml       # 推 tag 自动打包并发 Release
