@@ -130,17 +130,78 @@ def _window_profile_dir() -> str:
     return os.path.join(base, "browser")
 
 
-def _window_appeared(title_hint: str, timeout: float = 8.0) -> bool:
-    """等一个标题含 title_hint 的可见窗口出现——用来确认"独立窗口真的开了"。"""
+def _find_app_window(before: set, url: str, title_hint: str = "", timeout: float = 15.0) -> int:
+    """等「新开出来的那个窗口」，返回它的句柄（找不到返回 0）。
+
+    不能用标题匹配：Edge/Chrome 的应用窗口标题其实是 `<host>_<path>`
+    （比如 `localhost_/`），端口和页面标题都不进去。所以改成：
+    启动前记下已有窗口句柄，之后只要出现一个**新的** Chrome_WidgetWin 窗口，
+    且标题以 origin 记号（`localhost_`）开头或含 title_hint，就算成功。
+    """
     import time
 
+    token = _origin_token(url)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for _hwnd, _pid, title, _cls in _visible_windows():
-            if title_hint in title:
-                return True
-        time.sleep(0.4)
-    return False
+        for hwnd, _pid, title, cls in _visible_windows():
+            if hwnd in before or not cls.startswith("Chrome_WidgetWin"):
+                continue
+            if token and token in title:
+                return hwnd
+            if title_hint and title_hint in title:
+                return hwnd
+        time.sleep(0.3)
+    return 0
+
+
+def _decorate_window(hwnd: int, title: str) -> None:
+    """把窗口标题和图标换成我们自己的——不然任务栏上写的是 `localhost_/`、图标是 Edge 的。
+
+    跨进程改标题/图标对顶层窗口是允许的（SetWindowText / WM_SETICON），
+    浏览器可能在下一次导航时改回去，所以这里只是"尽力而为"，失败也不影响使用。
+    """
+    import ctypes
+
+    if not hwnd:
+        return
+    user32 = ctypes.windll.user32
+    SMTO_ABORTIFHUNG = 0x0002
+    WM_SETTEXT = 0x000C
+
+    def _send(message, wparam, lparam):
+        """带超时的 SendMessage：浏览器窗口卡住时不能把我们也拖死。"""
+        try:
+            user32.SendMessageTimeoutW(
+                hwnd, message, wparam, lparam, SMTO_ABORTIFHUNG, 800, None
+            )
+        except Exception:
+            pass
+
+    _send(WM_SETTEXT, 0, ctypes.c_wchar_p(title))
+
+    icon_path = os.path.join(bundle_dir(), "app.ico")
+    if not os.path.exists(icon_path):
+        return
+    try:
+        IMAGE_ICON, LR_LOADFROMFILE, LR_DEFAULTSIZE = 1, 0x0010, 0x0040
+        WM_SETICON, ICON_SMALL, ICON_BIG = 0x0080, 0, 1
+        hicon = user32.LoadImageW(None, icon_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE)
+        if hicon:
+            _send(WM_SETICON, ICON_BIG, hicon)
+            _send(WM_SETICON, ICON_SMALL, hicon)
+    except Exception:
+        pass
+
+
+def _origin_token(url: str) -> str:
+    """http://localhost:8501 -> `localhost_`（Edge 应用窗口标题的实际写法）。
+
+    实测：Edge/Chrome 的 --app 窗口标题是 `<host>_<path>`，端口会被丢掉、
+    页面标题也不会传进去，所以只能拿主机名当记号。
+    """
+    body = url.split("://", 1)[-1].split("/", 1)[0]  # localhost:8501
+    host = body.split(":")[0]                         # localhost
+    return host + "_"
 
 
 def _visible_windows():
@@ -171,80 +232,23 @@ def _visible_windows():
     return results
 
 
-def _is_elevated() -> bool:
-    """当前进程是不是管理员权限。"""
-    import ctypes
-    from ctypes import wintypes
-
-    TOKEN_QUERY = 0x0008
-    TOKEN_ELEVATION = 20
-    kernel32, advapi32 = ctypes.windll.kernel32, ctypes.windll.advapi32
-    token = wintypes.HANDLE()
-    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)):
-        return False
-    try:
-        value = wintypes.DWORD()
-        size = wintypes.DWORD()
-        ok = advapi32.GetTokenInformation(
-            token, TOKEN_ELEVATION, ctypes.byref(value), ctypes.sizeof(value), ctypes.byref(size)
-        )
-        return bool(value.value) if ok else False
-    finally:
-        kernel32.CloseHandle(token)
-
-
-def _browser_refuses_new_window() -> bool:
-    """有没有浏览器正以管理员权限运行。
-
-    这种情况下去开 --app 窗口，浏览器只会弹一句"是否用普通权限重启现有实例"然后什么都不开，
-    用户看到的就是"双击了没反应"。所以在动手之前先判断，直接走标签页。
-    """
-    import ctypes
-
-    if _is_elevated():
-        return False  # 同级别，能正常通信
-
-    PROCESS_QUERY_INFORMATION = 0x0400
-    ERROR_ACCESS_DENIED = 5
-    kernel32 = ctypes.windll.kernel32
-
-    for _hwnd, pid, _title, class_name in _visible_windows():
-        if not class_name.startswith("Chrome_WidgetWin"):
-            continue
-        handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
-        if handle:
-            kernel32.CloseHandle(handle)
-            continue
-        if kernel32.GetLastError() == ERROR_ACCESS_DENIED:
-            return True
-    return False
-
-
 def open_app_window(url: str, title_hint: str = "") -> bool:
     """以「应用窗口」方式打开：没有地址栏、没有标签页、独立任务栏图标，看起来就是个软件。
 
-    打不开（没装 Edge/Chrome、或浏览器以管理员权限在跑）就退回默认浏览器标签页，
+    打不开（没装 Edge/Chrome、或浏览器拒绝）就退回浏览器标签页，
     总之不能出现"双击了但什么都没发生"。
     """
     import subprocess
     import webbrowser
 
     if os.environ.get("AI_PARTNER_WINDOW", "1") == "0":
-        webbrowser.open(url)
+        _open_in_browser(url)
         return False
 
     browser = find_browser()
     if not browser:
         print("[提示] 没找到 Edge/Chrome，改用默认浏览器打开。")
-        webbrowser.open(url)
-        return False
-
-    if _browser_refuses_new_window():
-        print(
-            "[提示] 你的浏览器正以【管理员权限】运行，它不接受新窗口请求，这次用普通标签页打开。\n"
-            "       想要独立窗口（像软件一样）：把浏览器窗口全部关掉，再双击「启动AI智能伴侣」。"
-        )
-        webbrowser.open(url)
+        _open_in_browser(url)
         return False
 
     args = [
@@ -257,24 +261,74 @@ def open_app_window(url: str, title_hint: str = "") -> bool:
         "--no-service-autorun",
         "--disable-features=Translate",
     ]
+    before = set(hwnd for hwnd, _pid, _title, _cls in _visible_windows())
     try:
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as exc:
         print(f"[提示] 独立窗口打开失败（{exc}），改用默认浏览器。")
-        webbrowser.open(url)
+        _open_in_browser(url)
         return False
 
-    if not title_hint or _window_appeared(title_hint):
+    hwnd = _find_app_window(before, url, title_hint)
+    if hwnd:
+        _decorate_window(hwnd, title_hint or WINDOW_TITLE_HINT)
         return True
 
     # 没等到窗口：多半是浏览器以管理员权限在跑，拒绝了这个请求
-    print("[提示] 独立窗口没能打开（浏览器可能以管理员权限运行），改用浏览器标签页。")
+    print(
+        "[提示] 独立窗口没能打开（浏览器可能正以管理员权限运行），这次改用浏览器标签页。\n"
+        "       想要独立窗口：把浏览器窗口全部关掉，再双击「启动AI智能伴侣」。"
+    )
     try:
         proc.terminate()
     except OSError:
         pass
-    webbrowser.open(url)
+    _open_in_browser(url)
     return False
+
+
+def _open_in_browser(url: str) -> bool:
+    """最后的兜底：一定要让页面出现在用户眼前。
+
+    依次试 ShellExecute（os.startfile）、explorer、webbrowser——
+    其中 explorer 是以桌面 Shell 的身份去开，权限最"正常"，最容易被忽略的那个反而最可靠。
+    """
+    import subprocess
+    import webbrowser
+
+    write_current_url(url)
+
+    try:
+        os.startfile(url)  # noqa: S606 - Windows 专用，等价于双击
+        return True
+    except OSError:
+        pass
+
+    try:
+        subprocess.Popen(["explorer.exe", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        pass
+
+    try:
+        return webbrowser.open(url)
+    except Exception:
+        return False
+
+
+def write_current_url(url: str) -> None:
+    """把当前地址写进 当前地址.txt：窗口没弹出来时，用户还能自己复制去打开。"""
+    path = os.path.join(log_dir(), "当前地址.txt")
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "AI智能伴侣已经启动，地址是：\n\n"
+                + url
+                + "\n\n"
+                "如果浏览器没有自动打开，把上面这行地址复制到浏览器地址栏即可。\n"
+            )
+    except OSError:
+        pass
 
 
 def open_window_when_ready(port: int, title_hint: str = "") -> None:
@@ -288,6 +342,7 @@ def open_window_when_ready(port: int, title_hint: str = "") -> None:
         deadline = time.time() + 120
         while time.time() < deadline:
             if _health(port):
+                write_current_url(url)  # 万一窗口没弹出来，用户能自己复制地址
                 open_app_window(url, title_hint)
                 return
             time.sleep(0.4)

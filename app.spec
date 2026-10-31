@@ -73,31 +73,58 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name="AI智能伴侣",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,         # 不弹黑窗口，像个正常软件；启动失败由 launcher 弹窗 + 写启动日志.txt
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon="assets/app.ico" if os.path.exists("assets/app.ico") else None,
-)
+# 单文件版：AI_PARTNER_ONEFILE=1 pyinstaller ... app.spec
+# 好处是真的只有一个 exe（发给别人最省事）；代价是每次启动都要把 200+MB 解压到临时目录，
+# 第一次打开要 15~30 秒，也更容易被杀毒软件误报。默认还是 onedir。
+ONEFILE = os.environ.get("AI_PARTNER_ONEFILE") == "1"
+APP_NAME = "AI智能伴侣-单文件" if ONEFILE else "AI智能伴侣"
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="AI智能伴侣",
-)
+if ONEFILE:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name=APP_NAME,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon="assets/app.ico" if os.path.exists("assets/app.ico") else None,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name=APP_NAME,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,         # 不弹黑窗口，像个正常软件；启动失败由 launcher 弹窗 + 写启动日志.txt
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon="assets/app.ico" if os.path.exists("assets/app.ico") else None,
+    )
+
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name=APP_NAME,
+    )
