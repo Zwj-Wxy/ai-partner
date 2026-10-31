@@ -12,6 +12,22 @@ import sys
 # 页面标题（和 app.py 的 APP_TITLE 保持一致）：独立窗口的标题栏就是它，也用来判断窗口是否真的打开了
 WINDOW_TITLE_HINT = "AI智能伴侣"
 
+# 改动 launcher 时就把它 +1，打包校验会比对 exe 自检里报出来的这个号，
+# 防止「源码修好了、发出去的还是旧 exe」这种事故（这已经发生过一次）。
+LAUNCHER_VERSION = "2026.10.31.4"
+
+
+def _app_sha8() -> str:
+    """包里 app.py 的 sha256 前 8 位（取不到就返回 ?）。"""
+    import hashlib
+
+    path = os.path.join(bundle_dir(), "app.py")
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()[:8]
+    except OSError:
+        return "?"
+
 
 def bundle_dir() -> str:
     """PyInstaller 解包目录；源码运行时就是本文件所在目录。"""
@@ -56,6 +72,26 @@ def write_error_log(text: str) -> str:
         return path
     except OSError:
         return ""
+
+
+def _dbg(message: str) -> None:
+    """启动过程关键节点写进 运行日志.txt。
+
+    双击 exe 的窗口模式下没有控制台，print 出来的东西用户看不到；
+    出问题时让他把这个文件发过来，就能知道卡在哪一步。
+    """
+    import datetime
+
+    line = f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} [启动] {message}\n"
+    try:
+        with open(os.path.join(log_dir(), "运行日志.txt"), "a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        pass
+    try:
+        print(line.rstrip())
+    except Exception:  # noqa: BLE001 - 没有控制台时 print 可能直接抛错
+        pass
 
 
 def _port_is_free(port: int) -> bool:
@@ -128,15 +164,23 @@ def _window_profile_dir() -> str:
     **必须先建好目录**：Chromium 只会在已存在的目录里创建 ProcessSingleton 锁文件，
     父目录不存在时它会报 `Lock file can not be created! Error code: 5` 然后直接退出，
     用户看到的就是"双击了窗口没出来"。
-    """
-    base = (os.environ.get("AI_PARTNER_HOME") or "").strip() or os.path.join(
-        os.path.expanduser("~"), ".ai_partner"
-    )
-    path = os.path.join(base, "browser")
-    if _ensure_dir(path):
-        return path
 
-    # 家里目录写不了（权限/只读配置）就退到临时目录，至少还能开出窗口
+    顺序按"最可能写成功"排：先程序目录（解压到桌面/下载目录时一定可写），
+    再用户目录，最后系统临时目录——实测有些机器上写 `C:\\Users\\<名字>\\.ai_partner`
+    会被权限拦（`WinError 5 拒绝访问`），排在第一位就会每次都退到临时目录。
+    """
+    candidates = []
+    forced = (os.environ.get("AI_PARTNER_HOME") or "").strip()
+    if forced:
+        candidates.append(os.path.join(forced, "browser"))
+    candidates.append(os.path.join(app_dir(), "browser"))
+    candidates.append(os.path.join(os.path.expanduser("~"), ".ai_partner", "browser"))
+
+    for path in candidates:
+        if _ensure_dir(path):
+            return path
+
+    # 都写不了（只读设备/受控终端）就退到临时目录，至少还能开出窗口
     import tempfile
 
     try:
@@ -150,14 +194,21 @@ def _window_profile_dir() -> str:
 def _ensure_dir(path: str) -> bool:
     import os
 
+    return not _ensure_dir_error(path)
+
+
+def _ensure_dir_error(path: str) -> str:
+    """建目录，成功返回空字符串，失败返回错误信息（排查"窗口出不来"时要看这个）。"""
+    import os
+
     try:
         os.makedirs(path, exist_ok=True)
-        return True
-    except OSError:
-        return False
+        return ""
+    except OSError as exc:
+        return f"{type(exc).__name__}: {exc}"
 
 
-def _find_app_window(before: set, url: str, title_hint: str = "", timeout: float = 15.0) -> int:
+def _find_app_window(before: set, url: str, title_hint: str = "", timeout: float = 25.0) -> int:
     """等「新开出来的那个窗口」，返回它的句柄（找不到返回 0）。
 
     不能用标题匹配：Edge/Chrome 的应用窗口标题其实是 `<host>_<path>`
@@ -216,6 +267,39 @@ def _decorate_window(hwnd: int, title: str) -> None:
         if hicon:
             _send(WM_SETICON, ICON_BIG, hicon)
             _send(WM_SETICON, ICON_SMALL, hicon)
+    except Exception:
+        pass
+
+
+def _focus_window(hwnd: int) -> None:
+    """把窗口提到最前面并给焦点。
+
+    不然会出现这种"假死"：程序其实起来了、窗口也确实创建了，
+    但它被压在别的窗口后面（Windows 不允许后台进程抢前台），
+    用户看到的就是「双击了没反应」。这里用 AttachThreadInput 绕过前台锁。
+    """
+    import ctypes
+
+    if not hwnd:
+        return
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    SW_RESTORE = 9
+    try:
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
+        foreground = user32.GetForegroundWindow()
+        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+        foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+        attached = False
+        if foreground_thread and foreground_thread != target_thread:
+            attached = bool(user32.AttachThreadInput(foreground_thread, target_thread, True))
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetFocus(hwnd)
+        if attached:
+            user32.AttachThreadInput(foreground_thread, target_thread, False)
+        del kernel32
     except Exception:
         pass
 
@@ -299,6 +383,7 @@ def open_app_window(url: str, title_hint: str = "") -> bool:
     hwnd = _find_app_window(before, url, title_hint)
     if hwnd:
         _decorate_window(hwnd, title_hint or WINDOW_TITLE_HINT)
+        _focus_window(hwnd)
         return True
 
     # 没等到窗口：多半是浏览器以管理员权限在跑，拒绝了这个请求
@@ -356,25 +441,6 @@ def write_current_url(url: str) -> None:
             )
     except OSError:
         pass
-
-
-def open_window_when_ready(port: int, title_hint: str = "") -> None:
-    """服务真正能应答之后再开窗口——否则用户会先看到一个"无法访问"的页面。"""
-    import threading
-    import time
-
-    url = f"http://localhost:{port}"
-
-    def worker() -> None:
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            if _health(port):
-                write_current_url(url)  # 万一窗口没弹出来，用户能自己复制地址
-                open_app_window(url, title_hint)
-                return
-            time.sleep(0.4)
-
-    threading.Thread(target=worker, daemon=True, name="open-window").start()
 
 
 def _ensure_streams() -> None:
@@ -438,9 +504,14 @@ def _self_check() -> int:
     lines = []
     try:
         checked = []
-        for name in ("streamlit", "openai"):
+        for name in ("streamlit", "openai", "webview"):
             module = importlib.import_module(name)
             checked.append(f"{name}={getattr(module, '__version__', '?')}")
+        # exe 里到底装的是哪一版启动器 / 哪一份 app.py：
+        # launcher.py 会被编译进 PYZ（压缩过，没法用字符串搜索判断新旧），
+        # 所以让它自己报出来，打包脚本再和源码比对，防止"发出去的是旧 exe"。
+        checked.append("launcher=" + LAUNCHER_VERSION)
+        checked.append("app=" + _app_sha8())
         lines.append("SELFCHECK OK " + " ".join(checked))
         code = 0
     except Exception:
@@ -460,44 +531,16 @@ def _self_check() -> int:
     return code
 
 
-def main() -> None:
-    _ensure_streams()
-
-    from streamlit.web import cli as stcli
-
-    app_path = os.path.join(bundle_dir(), "app.py")
-    if not os.path.exists(app_path):
-        raise SystemExit(
-            f"找不到应用入口文件：{app_path}\n"
-            "通常是因为解压不完整：请把整个文件夹（含 _internal 子目录）一起解压后再运行，不要只拷贝 exe。"
-        )
-
-    try:
-        preferred = int(os.environ.get("AI_PARTNER_PORT", "8501"))
-    except ValueError:
-        preferred = 8501
-
-    # 已经开着（用户关掉窗口后又双击）就只把窗口叫回来，别再起一个服务
-    if os.environ.get("AI_PARTNER_SELFCHECK") != "1":
-        for port in range(preferred, preferred + 10):
-            if _health(port):
-                print(f"[提示] 程序已经在运行（端口 {port}），直接打开窗口。")
-                open_app_window(f"http://localhost:{port}", WINDOW_TITLE_HINT)
-                raise SystemExit(0)
-
-    port = pick_port(preferred)
-
-    if port != preferred:
-        print(f"[提示] 端口 {preferred} 被占用，改用 {port}")
-
-    # 窗口由我们自己开（--app 应用窗口），所以让 Streamlit 别去调默认浏览器
-    sys.argv = [
+def _server_args(port: int, app_path: str) -> list:
+    """拼出 Streamlit CLI 的参数（服务端模式用）。"""
+    return [
         "streamlit",
         "run",
         app_path,
         "--global.developmentMode=false",
         "--server.port", str(port),
         "--server.address", "localhost",
+        # 窗口由启动器自己开，别让 Streamlit 去调默认浏览器
         "--server.headless=true",
         "--browser.gatherUsageStats=false",
         # 主题与界面（打包后没有 .streamlit/config.toml，这里直接写死）
@@ -506,12 +549,225 @@ def main() -> None:
         "--client.toolbarMode", "minimal",
     ]
 
+
+def _run_server_only(port: int) -> None:
+    """纯服务端模式：只跑 Streamlit，不开窗口（由父进程用 --server-only 调起）。"""
+    from streamlit.web import cli as stcli
+
+    app_path = os.path.join(bundle_dir(), "app.py")
+    if not os.path.exists(app_path):
+        raise SystemExit(
+            f"找不到应用入口文件：{app_path}\n"
+            "通常是因为解压不完整：请把整个文件夹（含 _internal 子目录）一起解压后再运行，不要只拷贝 exe。"
+        )
+    sys.argv = _server_args(port, app_path)
+    sys.exit(stcli.main())
+
+
+def _server_command(port: int) -> list:
+    """怎么把"纯服务端"的那个自己叫起来。"""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--server-only", "--port", str(port)]
+    return [sys.executable, os.path.abspath(__file__), "--server-only", "--port", str(port)]
+
+
+def _native_window(url: str, icon: str) -> bool:
+    """用 WebView2 开一个真正的桌面窗口（没有地址栏、没有标签页、跟本体同一个图标）。
+
+    pywebview 在 Windows 上走的是系统自带的 WebView2 运行时，
+    不依赖用户装没装 Edge/Chrome，也不会像 --app 那样受浏览器权限影响。
+    返回 True 表示窗口正常打开过（关掉窗口时函数才返回）。
+    """
+    try:
+        # 打包（frozen）环境下 pythonnet 自动挑运行时偶尔会挑错，导致
+        # RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize，
+        # 这里显式指定 .NET Framework（Windows 自带，不需要用户装 .NET Core）。
+        from pythonnet import load as _load_runtime
+
+        _load_runtime("netfx")
+        _dbg("pythonnet 运行时 = netfx（已显式指定）")
+    except Exception as exc:  # noqa: BLE001 - 已经加载过运行时会抛错，忽略即可
+        _dbg(f"pythonnet 显式指定 netfx 失败（可忽略）：{type(exc).__name__}: {exc}")
+
+    try:
+        import webview
+    except Exception as exc:  # noqa: BLE001
+        _dbg(f"import webview 失败：{type(exc).__name__}: {exc}")
+        return False
+
+    try:
+        _dbg(f"开始创建桌面窗口：{url}")
+        webview.create_window(
+            WINDOW_TITLE_HINT,
+            url,
+            width=1180,
+            height=860,
+            min_size=(900, 600),
+            background_color="#FFFFFF",
+            text_select=True,
+        )
+        webview.start(icon=icon if os.path.exists(icon) else None)
+        _dbg("桌面窗口已关闭")
+        return True
+    except Exception as exc:  # noqa: BLE001 - 打不开就换方案，不能把用户卡死
+        _dbg(f"桌面窗口启动失败：{type(exc).__name__}: {exc}，改用浏览器窗口")
+        print(f"[提示] 桌面窗口启动失败（{exc}），改用浏览器窗口。")
+        return False
+
+
+def _wait_health(port: int, timeout: float = 120.0) -> bool:
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _health(port):
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def main() -> None:
+    _ensure_streams()
+
+    try:
+        preferred = int(os.environ.get("AI_PARTNER_PORT", "8501"))
+    except ValueError:
+        preferred = 8501
+
+    mode = (os.environ.get("AI_PARTNER_WINDOW") or "").strip().lower()
+    _dbg(f"启动器版本 {LAUNCHER_VERSION}，exe={sys.executable}，模式={mode or '默认（桌面窗口）'}")
+
+    # 已经开着（用户关掉窗口后又双击）就只把窗口叫回来，别再起一个服务
+    for port in range(preferred, preferred + 10):
+        if _health(port):
+            print(f"[提示] 程序已经在运行（端口 {port}），直接打开窗口。")
+            _show_window(f"http://localhost:{port}", mode)
+            raise SystemExit(0)
+
+    port = pick_port(preferred)
+    if port != preferred:
+        print(f"[提示] 端口 {preferred} 被占用，改用 {port}")
+
+    app_path = os.path.join(bundle_dir(), "app.py")
+    if not os.path.exists(app_path):
+        raise SystemExit(
+            f"找不到应用入口文件：{app_path}\n"
+            "通常是因为解压不完整：请把整个文件夹（含 _internal 子目录）一起解压后再运行，不要只拷贝 exe。"
+        )
+
     # CI 里只验证 HTTP 能不能起来，不需要窗口
     if os.environ.get("CI"):
-        sys.exit(stcli.main())
+        _run_server_only(port)
 
-    open_window_when_ready(port, WINDOW_TITLE_HINT)
-    sys.exit(stcli.main())
+    # 服务跑在子进程里：WebView2 的窗口事件循环必须占着主线程，
+    # 而 Streamlit 的 CLI 只能在主线程装信号处理器，两者不能同住一个进程。
+    exe_dir = app_dir()
+    env = dict(os.environ, AI_PARTNER_CHILD="1")
+    log_path = os.path.join(log_dir(), "运行日志.txt")
+    try:
+        log_handle = open(log_path, "a", encoding="utf-8", errors="replace")
+    except OSError:
+        log_handle = subprocess_devnull()
+
+    child = subprocess_popen(_server_command(port), exe_dir, env, log_handle)
+    _dbg(f"已启动后台服务子进程 pid={child.pid}，端口 {port}，等待就绪…")
+    try:
+        if not _wait_health(port, timeout=120):
+            _dbg("后台服务 120 秒内没有响应")
+            raise SystemExit(
+                "后台服务没能启动成功（等了 120 秒还没有响应）。\n"
+                f"详细日志：{log_path}"
+            )
+        _dbg("后台服务已就绪，开始打开窗口")
+        _show_window(f"http://localhost:{port}", mode)
+    finally:
+        try:
+            child.terminate()
+        except OSError:
+            pass
+        try:
+            log_handle.close()
+        except OSError:
+            pass
+
+
+def subprocess_devnull():
+    return open(os.devnull, "w", encoding="utf-8")
+
+
+def subprocess_popen(command: list, cwd: str, env: dict, log_handle):
+    import subprocess
+
+    return subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log_handle,
+        stderr=log_handle,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def _show_window(url: str, mode: str = "") -> None:
+    """按优先级把界面送到用户眼前。
+
+    实测结论（2026-10-31，Edge 156）：
+      * 原生窗口（pywebview + WebView2）在**源码模式**下完美，但打包成 exe 后
+        pythonnet 加载 .NET 运行时会失败，用户机器上大概率起不来；
+      * Edge 的 `--app=<url>` 在这种版本的 Edge 上会把端口丢掉（标题变成
+        `localhost_/`，实际访问 http://localhost 的 80 端口 → 白屏 / 拒绝连接）。
+    所以默认走最稳的那条：系统默认浏览器。想试新窗口可以设
+    AI_PARTNER_WINDOW=native（原生窗口）或 =edge（Edge 应用窗口）。
+    """
+    write_current_url(url)
+
+    icon = os.path.join(bundle_dir(), "app.ico")
+
+    if mode == "native":
+        if _native_window(url, icon):
+            return
+        _dbg("原生窗口不可用，改用浏览器")
+    elif mode == "edge":
+        if open_app_window(url, WINDOW_TITLE_HINT):
+            return
+        _dbg("Edge 应用窗口不可用，改用浏览器")
+
+    # 默认 / 兜底：直接交给系统默认浏览器（100% 能显示，只是带地址栏和标签页）
+    _dbg(f"用默认浏览器打开：{url}")
+    before = set(hwnd for hwnd, _pid, _title, _cls in _visible_windows())
+    _open_in_browser(url)
+    if _wait_new_browser_window(before, timeout=12.0):
+        _dbg("浏览器窗口已打开")
+        return
+
+    # 12 秒都没等到新窗口：最常见的原因是浏览器正以【管理员权限】运行，
+    # 普通权限的程序没法让它开窗口（Windows 的权限隔离），这时给个明白的弹窗，
+    # 而不是让用户对着"什么都没发生"发呆。
+    _dbg("12 秒内没有出现新的浏览器窗口")
+    _fatal(
+        "服务已经启动好了，但没能打开浏览器窗口。\n\n"
+        f"可以手动把这个地址复制到浏览器里打开：\n{url}\n\n"
+        "为什么会这样？最常见的原因是你的浏览器（Edge/Chrome）正以【管理员权限】运行，\n"
+        "普通权限的程序没法让它开新窗口。解决办法任选一个：\n"
+        "  1. 右键「AI智能伴侣.exe」→「以管理员身份运行」；\n"
+        "  2. 把上面这个地址直接粘贴到浏览器地址栏。"
+    )
+
+
+def _wait_new_browser_window(before: set, timeout: float = 12.0) -> bool:
+    """等一个新的浏览器窗口出现（浏览器被管理员权限卡住时就等不到）。"""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for hwnd, _pid, _title, cls in _visible_windows():
+            if hwnd in before:
+                continue
+            if cls.startswith("Chrome_WidgetWin"):
+                return True
+        time.sleep(0.5)
+    return False
 
 
 def _crash_report(note: str = "") -> str:
@@ -540,9 +796,82 @@ def _crash_report(note: str = "") -> str:
     return "\n".join(lines)
 
 
+def _diagnose() -> int:
+    """诊断模式（AI_PARTNER_DIAG=1）：把路径/环境/浏览器判断结果写成文件后退出。
+
+    排查「双击没反应」时不用猜——拿到这个文件就知道是找不到浏览器、
+    配置目录建不出来，还是根本没有窗口权限。
+    """
+    import platform
+    import tempfile
+
+    lines = ["AI 智能伴侣 —— 诊断报告", ""]
+    lines.append(f"系统：{platform.platform()}")
+    lines.append(f"frozen：{bool(getattr(sys, 'frozen', False))}")
+    lines.append(f"exe：{sys.executable}")
+    lines.append("")
+    lines.append("环境变量：")
+    for name in ("USERPROFILE", "HOME", "TEMP", "TMP", "TMPDIR", "AI_PARTNER_HOME",
+                 "AI_PARTNER_PORT", "AI_PARTNER_WINDOW", "AI_PARTNER_BROWSER"):
+        lines.append(f"  {name} = {os.environ.get(name)!r}")
+    lines.append("")
+    lines.append(f"程序目录 app_dir()      = {app_dir()}")
+    lines.append(f"资源目录 bundle_dir()   = {bundle_dir()}")
+    lines.append(f"用户目录 expanduser(~)  = {os.path.expanduser('~')!r}")
+    lines.append(f"系统临时目录            = {tempfile.gettempdir()!r}")
+    lines.append(f"日志目录 log_dir()      = {log_dir()}")
+    try:
+        lines.append(f"窗口配置目录            = {_window_profile_dir()}")
+    except Exception as exc:  # noqa: BLE001 - 诊断模式要尽量多带信息
+        lines.append(f"窗口配置目录            = 失败：{exc}")
+    home_browser = os.path.join(os.path.expanduser("~"), ".ai_partner", "browser")
+    lines.append(f"建 {home_browser} 的结果 = {_ensure_dir_error(home_browser) or '成功'}")
+    lines.append(f"建 {os.path.join(app_dir(), 'browser')} 的结果 = "
+                 f"{_ensure_dir_error(os.path.join(app_dir(), 'browser')) or '成功'}")
+    lines.append(f"浏览器 find_browser()   = {find_browser() or '（没找到）'}")
+    for label, statement in (
+        ("import webview", "import webview"),
+        ("import clr", "import clr"),
+        ("webview.platforms.winforms", "from webview.platforms import winforms"),
+    ):
+        try:
+            exec(statement, {})  # noqa: S102 - 诊断模式，只做导入检查
+            lines.append(f"{label} = OK")
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"{label} = 失败：{type(exc).__name__}: {exc}")
+    lines.append("")
+    windows = [w for w in _visible_windows() if w[3].startswith("Chrome_WidgetWin")]
+    lines.append(f"可见的浏览器窗口 {len(windows)} 个：")
+    for _hwnd, pid, title, cls in windows:
+        lines.append(f"  pid={pid} class={cls} title={title!r}")
+    text = "\n".join(lines)
+
+    out = (os.environ.get("AI_PARTNER_DIAG_OUT") or "").strip()
+    if not out:
+        out = os.path.join(log_dir(), "诊断报告.txt")
+    try:
+        with open(out, "w", encoding="utf-8-sig") as handle:
+            handle.write(text)
+    except OSError:
+        return 3
+    print(text)
+    return 0
+
+
 if __name__ == "__main__":
     if os.environ.get("AI_PARTNER_SELFCHECK") == "1":
         raise SystemExit(_self_check())
+    if os.environ.get("AI_PARTNER_DIAG") == "1":
+        raise SystemExit(_diagnose())
+    if "--server-only" in sys.argv:
+        # 父进程（同目录下的 exe）用这个参数把"只跑服务、不开窗口"的自己叫起来
+        try:
+            server_port = int(sys.argv[sys.argv.index("--port") + 1])
+        except (ValueError, IndexError):
+            server_port = 8501
+        _ensure_streams()
+        _run_server_only(server_port)
+        raise SystemExit(0)
     try:
         main()
     except SystemExit as exc:

@@ -73,6 +73,19 @@ def _describe_metadata(path: str) -> str:
     return "?"
 
 
+def _source_launcher_version() -> str:
+    """从源码 launcher.py 里读出 LAUNCHER_VERSION，用来和 exe 自检报的号对比。"""
+    path = os.path.join(ROOT, "launcher.py")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip().startswith("LAUNCHER_VERSION"):
+                    return line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return ""
+
+
 def _run_self_check(exe_path: str, cwd: str) -> tuple:
     """让 exe 以自检模式跑一遍（launcher.py 的 AI_PARTNER_SELFCHECK），
     返回 (是否通过, 说明)。这是唯一能验证“包里的第三方模块真能 import”的办法。
@@ -218,6 +231,19 @@ def main() -> int:
         ok, detail = _run_self_check(exe_path, base)
         if ok:
             print(f"  ✓ exe 自检通过（{detail}）")
+            # launcher.py 被打进 PYZ（压缩过，搜字符串判断不了新旧），
+            # 只能让它自己把版本号报出来跟源码比 —— 曾经就因为 dist 里躺着旧 exe，
+            # 源码修好的「建配置目录」「开窗后置前」全都没生效。
+            want = _source_launcher_version()
+            got = ""
+            for token in detail.split():
+                if token.startswith("launcher="):
+                    got = token.split("=", 1)[1]
+            if want and got and got != want:
+                required_failed.append(f"exe 里的 launcher 版本是 {got}，源码是 {want}")
+                print(f"  ✗ exe 是旧启动器（{got}），源码已经是 {want} —— 重新打包")
+            elif want and got:
+                print(f"  ✓ 启动器版本与源码一致（{got}）")
         else:
             required_failed.append("exe 自检失败")
             print(f"  ✗ exe 自检失败 —— {detail}")

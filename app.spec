@@ -20,6 +20,12 @@ binaries = []
 hiddenimports = [
     "streamlit.runtime.scriptrunner.magic_funcs",
     "streamlit.web.cli",
+    # 桌面窗口（WebView2）那一套是运行时才挑后端的，静态分析看不见
+    "webview.platforms.winforms",
+    "webview.platforms.edgechromium",
+    "clr",
+    "clr_loader",
+    "pythonnet",
 ]
 
 # 注意：app.py 是当成**数据文件**塞进包里的（Streamlit 运行时用 exec 执行它），
@@ -28,7 +34,8 @@ hiddenimports = [
 # ModuleNotFoundError: No module named 'openai'。
 # Streamlit / Altair / PyDeck 同理，需要连同数据文件、元数据一起打包，
 # 否则运行时会报“找不到 streamlit 版本”或缺失前端静态资源。
-for package in ("streamlit", "altair", "pydeck", "openai"):
+# pywebview 还必须带上它自带的 WebView2 的 .NET 程序集，否则窗口创建不出来。
+for package in ("streamlit", "altair", "pydeck", "openai", "webview"):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
     except Exception:  # 该包未安装时跳过
@@ -37,7 +44,8 @@ for package in ("streamlit", "altair", "pydeck", "openai"):
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
 
-for metadata_package in ("streamlit", "altair", "pydeck", "openai", "pandas", "numpy", "packaging"):
+for metadata_package in ("streamlit", "altair", "pydeck", "openai", "pandas", "numpy", "packaging",
+                         "pywebview", "pythonnet", "clr_loader"):
     try:
         datas += copy_metadata(metadata_package)
     except Exception:
