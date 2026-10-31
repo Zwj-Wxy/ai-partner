@@ -43,3 +43,10 @@ sessions/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Electron 试验产物（本机装不起来，没跑通，不进仓库）
+node_modules/
+.npm-cache/
+.build/
+package.json
+package-lock.json
