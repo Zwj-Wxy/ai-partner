@@ -31,10 +31,14 @@ for package in ("streamlit", "altair", "pydeck"):
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
 
-for metadata_package in ("streamlit", "altair"):
+for metadata_package in ("streamlit", "altair", "pydeck", "openai", "pandas", "numpy", "packaging"):
     try:
         datas += copy_metadata(metadata_package)
     except Exception:
+        # streamlit 是硬依赖：它 import 时要用 importlib.metadata 读自己的版本号，
+        # 缺了 dist-info 就会 PackageNotFoundError: No package metadata was found for streamlit
+        if metadata_package == "streamlit":
+            raise
         pass
 
 # 明显用不到的大块头，剔除后体积能小不少

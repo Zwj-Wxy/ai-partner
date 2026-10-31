@@ -95,6 +95,13 @@ Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
 
 或直接跑一键脚本：`powershell -ExecutionPolicy Bypass -File scripts\build.ps1`
 
+> ⚠️ **`app.spec` 里的 `copy_metadata("streamlit")` 不能删。**
+> Streamlit 在 `import` 时会用 `importlib.metadata` 读自己的版本号，如果打包时没把
+> `streamlit-x.y.z.dist-info` 一起带上，exe 一启动就直接崩，报
+> `PackageNotFoundError: No package metadata was found for streamlit`
+> ——控制台窗口一闪就没，看不出所以然。CI 里有一道「Launch check」，会真的把 exe 跑起来、
+> 等 8501 端口返回 200 才发布，就是为了挡住这种"打不开的包"。
+
 产物结构（约 200 MB，PyInstaller **onedir 模式**，比 onefile 启动快很多）：
 
 ```
@@ -206,6 +213,10 @@ ai_partner/
 
 **Q：双击 exe 一闪就没了？**
 说明启动报错。在 PowerShell 里执行 `.\AI智能伴侣.exe`，就能看到真实错误信息。
+
+如果看到的是 `PackageNotFoundError: No package metadata was found for streamlit`，
+那不是你电脑的问题，是这个包在打包时漏了 Streamlit 的元数据——换一个最新 Release 里的包，
+或者干脆按下面的「源码运行」跑。本仓库的 `app.spec` 已经修掉了这个坑，CI 也会先把 exe 跑起来验证再发布。
 
 **Q：提示端口被占用？**
 换个端口：`set AI_PARTNER_PORT=8600` 再启动；或关掉占用 8501 的进程。

@@ -40,9 +40,41 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean app.spec
 
+      - name: Launch check（打不开就不许发）
+        shell: pwsh
+        run: |
+          $exe = "dist\AI智能伴侣\AI智能伴侣.exe"
+          if (-not (Test-Path $exe)) { throw "没找到 exe：$exe" }
+          $env:AI_PARTNER_PORT = "8501"
+          $env:CI = "true"
+          $log = Join-Path $env:RUNNER_TEMP "exe-out.txt"
+          $p = Start-Process -FilePath $exe -PassThru `
+               -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          $up = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 1
+            if ($p.HasExited) { break }
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:8501" -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200) { $up = $true; break }
+            } catch { }
+          }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          if (-not $up) {
+            Write-Host "---- exe stdout ----"
+            Get-Content $log -ErrorAction SilentlyContinue
+            Write-Host "---- exe stderr ----"
+            Get-Content "$log.err" -ErrorAction SilentlyContinue
+            throw "exe 启动后没能在 8501 端口返回页面，这个包发出去用户也打不开"
+          }
+          Write-Host "OK：exe 启动正常，http://127.0.0.1:8501 返回 200"
+
       - name: Bundle launchers and docs
         shell: pwsh
         run: |
+          # 启动验证会生成 sessions/，别把它塞进发布包
+          Remove-Item dist\AI智能伴侣\sessions -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item dist\AI智能伴侣\config.json -Force -ErrorAction SilentlyContinue
           Copy-Item packaging\*.bat dist\AI智能伴侣\ -Force
           Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
           Get-ChildItem dist\AI智能伴侣 | Select-Object Name, Length

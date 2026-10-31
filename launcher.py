@@ -15,6 +15,19 @@ def bundle_dir() -> str:
     return getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 
 
+def _pause_if_interactive(message: str) -> None:
+    """双击运行时控制台会随进程退出立刻关闭，出错时停一下，让人看得见原因。"""
+    print("\n" + "=" * 64)
+    print(message)
+    print("=" * 64)
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return
+        input("按回车键关闭窗口…")
+    except (EOFError, OSError, AttributeError):
+        return
+
+
 def main() -> None:
     from streamlit.web import cli as stcli
 
@@ -23,6 +36,8 @@ def main() -> None:
         raise SystemExit(f"找不到应用入口文件：{app_path}")
 
     port = os.environ.get("AI_PARTNER_PORT", "8501")
+    # CI 里跑启动验证时没有浏览器，headless=true 免得它去找浏览器
+    headless = "true" if os.environ.get("CI") else "false"
 
     # 等价于：streamlit run app.py --server.port 8501
     sys.argv = [
@@ -32,7 +47,7 @@ def main() -> None:
         "--global.developmentMode=false",
         "--server.port", str(port),
         "--server.address", "localhost",
-        "--server.headless=false",
+        "--server.headless=" + headless,
         "--browser.gatherUsageStats=false",
         # 主题与界面（打包后没有 .streamlit/config.toml，这里直接写死）
         "--theme.base", "light",
@@ -43,4 +58,16 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+
+        traceback.print_exc()
+        _pause_if_interactive(
+            "启动失败：上面是详细错误信息。\n"
+            "可以把这段文字反馈给作者；也可以改用源码运行：pip install -r requirements.txt 后 streamlit run app.py"
+        )
+        raise
