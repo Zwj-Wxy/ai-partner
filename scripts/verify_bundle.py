@@ -11,13 +11,17 @@
     而下面这些"非代码文件"必须显式声明才会进包：
       - streamlit 的 dist-info（importlib.metadata 读版本号用；缺了直接崩）
       - streamlit/static 前端资源（缺了服务起来了也是白屏）
+      - openai 模块本体（app.py 是数据文件，PyInstaller 静态分析看不到它 import openai，
+        缺了用户打开网页只看到一段 ModuleNotFoundError 红字）
       - app.py、resources/（应用自己的东西）
+    最后还会让 exe 以自检模式真跑一次（AI_PARTNER_SELFCHECK=1），确认这些模块真能 import。
 """
 
 import argparse
 import glob
 import hashlib
 import os
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +37,10 @@ CHECKS = [
      "启动即崩：PackageNotFoundError: No package metadata was found for streamlit"),
     ("Altair 元数据", "_internal/altair-*.dist-info", False, "图表功能可能报版本错误"),
     ("OpenAI SDK 元数据", "_internal/openai-*.dist-info", False, "一般不影响（SDK 版本号是写死的）"),
+    ("OpenAI SDK 模块", "_internal/openai/__init__.py", True,
+     "页面里报 ModuleNotFoundError: No module named 'openai'（app.py 是数据文件，静态分析看不到它的 import）"),
+    # 注意：httpx 这类纯 Python 依赖被打进 exe 内部的 PYZ 归档，不会出现在 _internal/ 里，
+    # 靠最后那步“exe 自检”来验证——openai 一 import 就会连带 import httpx。
 ]
 
 
@@ -59,6 +67,40 @@ def _describe_metadata(path: str) -> str:
                 if line.startswith("Version:"):
                     return line.split(":", 1)[1].strip()
     return "?"
+
+
+def _run_self_check(exe_path: str, cwd: str) -> tuple:
+    """让 exe 以自检模式跑一遍（launcher.py 的 AI_PARTNER_SELFCHECK），
+    返回 (是否通过, 说明)。这是唯一能验证“包里的第三方模块真能 import”的办法。
+    """
+    env = dict(os.environ, AI_PARTNER_SELFCHECK="1")
+    try:
+        proc = subprocess.run(
+            [exe_path],
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "自检 180 秒没结束（首次运行被杀毒软件扫描时可能较慢）"
+    except OSError as exc:
+        return False, f"起不来：{exc}"
+
+    raw = (proc.stdout or b"") + (proc.stderr or b"")
+    for encoding in ("utf-8", "gbk"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", "replace")
+
+    if "SELFCHECK OK" in text:
+        detail = text.split("SELFCHECK OK", 1)[1].strip().splitlines()[0]
+        return True, detail
+    tail = " ".join(text.strip().splitlines()[-6:])[:400] or f"退出码 {proc.returncode}"
+    return False, tail
 
 
 def main() -> int:
@@ -124,6 +166,17 @@ def main() -> int:
                 print(f"  ✗ {name} —— {'、'.join(problems)}；cmd 里会整段乱码")
             else:
                 print(f"  ✓ {name}（GBK + CRLF）")
+
+    # 真把 exe 跑一遍自检：静态检查看不出的缺失（比如少了 openai 模块）
+    # 在这里当场暴露，而不是等用户打开网页看见一段红字 Traceback
+    exe_path = os.path.join(base, "AI智能伴侣.exe")
+    if os.path.exists(exe_path):
+        ok, detail = _run_self_check(exe_path, base)
+        if ok:
+            print(f"  ✓ exe 自检通过（{detail}）")
+        else:
+            required_failed.append("exe 自检失败")
+            print(f"  ✗ exe 自检失败 —— {detail}")
 
     print()
     if required_failed:

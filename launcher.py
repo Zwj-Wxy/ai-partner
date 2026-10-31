@@ -28,6 +28,23 @@ def _pause_if_interactive(message: str) -> None:
         return
 
 
+def _self_check() -> None:
+    """自检模式：只验证包里的依赖能不能 import，然后退出。
+
+    打包后 app.py 是当数据文件被 Streamlit exec 的，PyInstaller 静态分析看不到
+    它的 import；一旦漏收某个包，用户看到的只是网页里一段红字 Traceback。
+    所以让打包流程真的把 exe 跑一遍自检（AI_PARTNER_SELFCHECK=1）：
+        ModuleNotFoundError 会在这一步当场暴露，发不出去。
+    """
+    import importlib
+
+    checked = []
+    for name in ("streamlit", "openai"):
+        module = importlib.import_module(name)
+        checked.append(f"{name}={getattr(module, '__version__', '?')}")
+    print("SELFCHECK OK " + " ".join(checked))
+
+
 def main() -> None:
     from streamlit.web import cli as stcli
 
@@ -58,6 +75,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if os.environ.get("AI_PARTNER_SELFCHECK") == "1":
+        _self_check()
+        raise SystemExit(0)
     try:
         main()
     except SystemExit:

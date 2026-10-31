@@ -109,9 +109,14 @@ Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
 | `streamlit-x.y.z.dist-info`（元数据） | 启动瞬间崩：`PackageNotFoundError` | `app.spec` 里的 `copy_metadata("streamlit")` |
 | `streamlit/static/`（前端 JS/CSS） | 服务起来了，但浏览器一片白 | `app.spec` 里的 `collect_all("streamlit")` |
 
+> 关键细节：`app.py` 是当成**数据文件**塞进包里的，Streamlit 运行时才 `exec` 它，
+> 所以 PyInstaller 的静态分析只看得见 `launcher.py`。`app.py` 里 `from openai import OpenAI`
+> 它压根看不到——不显式 `collect_all("openai")`，用户打开网页就是一段
+> `ModuleNotFoundError: No module named 'openai'`。**新加任何第三方库，都要同步加进 `app.spec`。**
+
 所以打包链路现在是三道闸：
 
-1. `python scripts/verify_bundle.py` —— 检查产物里 exe / app.py / resources / static / dist-info 是否齐全，还比对包内 `app.py` 与源码的 sha256，防止发出旧代码打的包；
+1. `python scripts/verify_bundle.py` —— 检查产物里 exe / app.py / resources / static / dist-info / openai 模块是否齐全，比对包内 `app.py` 与源码的 sha256，最后**让 exe 以自检模式真跑一遍**（`AI_PARTNER_SELFCHECK=1`）；
 2. `python tests/test_apptest.py` —— 用**真 Streamlit** 的 `AppTest` 把页面渲染三遍（无 key / 填了 key / 清空 key），确认不抛异常；
 3. CI 里的「Launch check」—— 真的把 exe 跑起来，等 `http://127.0.0.1:8501` 返回 200 才允许发布。
 

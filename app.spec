@@ -20,9 +20,13 @@ hiddenimports = [
     "streamlit.web.cli",
 ]
 
-# Streamlit / Altair 需要连同数据文件、元数据一起打包，
-# 否则运行时会报 “找不到 streamlit 版本” 或缺失前端静态资源。
-for package in ("streamlit", "altair", "pydeck"):
+# 注意：app.py 是当成**数据文件**塞进包里的（Streamlit 运行时用 exec 执行它），
+# PyInstaller 的静态分析只看得见 launcher.py，看不到 app.py 里的
+# `from openai import OpenAI` —— 不显式收集就会在用户机器上炸
+# ModuleNotFoundError: No module named 'openai'。
+# Streamlit / Altair / PyDeck 同理，需要连同数据文件、元数据一起打包，
+# 否则运行时会报“找不到 streamlit 版本”或缺失前端静态资源。
+for package in ("streamlit", "altair", "pydeck", "openai"):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
     except Exception:  # 该包未安装时跳过
