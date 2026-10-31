@@ -32,10 +32,15 @@
 到本仓库的 **Releases** 页面下载 `AI-Partner-Windows-x64.zip`：
 
 1. 解压到任意目录（路径别带空格更稳）；
-2. 双击 `启动AI智能伴侣.bat`，浏览器会自动打开 `http://localhost:8501`；
+2. 双击 `启动AI智能伴侣.bat`，浏览器会自动打开；地址通常是 `http://localhost:8501`，
+   若该端口被占用会自动换成 8502、8503……（启动窗口里会打印实际地址）；
 3. 第一次运行在左侧「🔑 API 设置」里填入 DeepSeek API Key 即可开聊。
 
 > 程序完全离线运行在你的电脑上，聊天记录保存在同目录的 `sessions/` 文件夹。
+
+**把程序发给别人时**：打包的 `_internal` 里已经带了 Python 运行时与全部依赖，对方电脑
+**不需要装 Python**。但必须整个文件夹一起发（压缩成 zip），只发 exe 会因为缺 `_internal`
+而打不开。对方打不开时，让他双击 `排查问题.bat`，把生成的 `排查结果.txt` 发回来即可定位。
 
 ### 方式三：从源码运行（开发者）
 
@@ -227,7 +232,7 @@ ai_partner/
 ├── requirements.txt            # 运行依赖
 ├── requirements-build.txt      # 打包依赖
 ├── resources/                  # 静态资源（logo 等）
-├── packaging/                  # 提供给最终用户的启动/停止脚本
+├── packaging/                  # 提供给最终用户的启动/停止/排查脚本
 ├── docs/使用说明.md            # 给最终用户看的说明书
 ├── docs/banner.png             # README 横幅
 ├── docs/original/05.ai_partner_4.py  # 最初那份单文件源码（存档）
@@ -245,11 +250,29 @@ ai_partner/
 ## ❓ 常见问题
 
 **Q：双击 exe 一闪就没了？**
-说明启动报错。在 PowerShell 里执行 `.\AI智能伴侣.exe`，就能看到真实错误信息。
+先看程序目录里有没有生成 `启动日志.txt`（启动失败时会自动写，里面带系统版本、路径和完整 traceback），
+或者直接双击 `排查问题.bat` 生成一份诊断报告。也可以手动在 PowerShell 里执行 `.\AI智能伴侣.exe` 看到真实错误。
 
 如果看到的是 `PackageNotFoundError: No package metadata was found for streamlit`，
 那不是你电脑的问题，是这个包在打包时漏了 Streamlit 的元数据——换一个最新 Release 里的包，
 或者干脆按下面的「源码运行」跑。本仓库的 `app.spec` 已经修掉了这个坑，CI 也会先把 exe 跑起来验证再发布。
+
+**Q：我这台电脑能打开，发给别人就打不开？**
+九成是传输/杀毒问题，不是程序问题——`_internal` 里已经带了 Python 运行时（`python313.dll`）、
+C 运行库（`VCRUNTIME140.dll`、`ucrtbase.dll`）和全部依赖，对方**不需要装 Python**。按出现频率排：
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 没反应 / 一闪而过 / 提示缺 dll | 只发了 exe，没带 `_internal` | 整个文件夹压成 zip 再发 |
+| 直接双击压缩包里的 exe | Windows 不支持包内运行 | 先解压到硬盘 |
+| `Windows 已保护你的电脑` | SmartScreen 不认识新程序 | 更多信息 → 仍要运行 |
+| 文件消失 / 杀毒弹窗 | PyInstaller 程序常见误报 | 加信任区，或先关杀毒再解压 |
+| exe 变 0 字节 / 损坏 | 微信、QQ 传输时被拦 | 用网盘发 zip，别在聊天窗口直接点 |
+| 页面打不开但窗口还在 | 对方 8501 被占用 | 已自动换端口，看启动窗口打印的地址 |
+| 一堆 DLL 错误 | 对方是 Win7/8 | Python 3.13 只支持 Windows 10+ |
+
+对方打不开时，让他双击 `排查问题.bat`，把生成的 `排查结果.txt` 发回来——里面包含系统版本、
+文件是否齐全、端口占用、能否启动、以及 `启动日志.txt` 的全文。详细清单见 [docs/使用说明.md](docs/使用说明.md) 第七节。
 
 **Q：双击 `启动AI智能伴侣.bat`，窗口里刷出一堆 `'浠跺彜閲屻€?' 不是内部或外部命令`？**
 本地改过 bat、用编辑器另存时把它存成了 UTF-8 或 LF 行尾。cmd 只认 **GBK + CRLF**，
@@ -260,7 +283,9 @@ python scripts/fix_bat_encoding.py
 ```
 
 **Q：提示端口被占用？**
-换个端口：`set AI_PARTNER_PORT=8600` 再启动；或关掉占用 8501 的进程。
+`launcher.py` 会自动从 8501 往后找空闲端口，并把实际地址打印在启动窗口里，通常不用管。
+想固定端口：`set AI_PARTNER_PORT=8600` 再启动（此时端口被占会直接报错提示，不再自动换）。
+排查脚本 `排查问题.bat` 里也会列出 8501 的占用情况。
 
 **Q：`_internal` 能删吗？能只发给别人 exe 吗？**
 不能。PyInstaller onedir 模式下 exe 只是引导程序，必须和 `_internal/` 一起分发。真要单文件就改成 onefile，但启动会慢很多（每次解压 200 MB）。

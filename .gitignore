@@ -21,6 +21,11 @@ build_tmp/
 .build_log.txt
 run.log
 
+# 运行期生成的文件（含别人电脑上的诊断信息）
+启动日志.txt
+排查结果.txt
+当前地址.txt
+
 # 本地配置与隐私数据（绝对不要提交！）
 config.json
 sessions/
