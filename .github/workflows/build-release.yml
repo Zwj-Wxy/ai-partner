@@ -37,8 +37,16 @@ jobs:
       - name: Smoke test
         run: python tests/test_smoke.py
 
+      - name: App test（用真 Streamlit 渲染一遍）
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/test_apptest.py
+
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean app.spec
+
+      - name: Bundle check（缺文件就别浪费后面的时间）
+        run: python scripts/verify_bundle.py
 
       - name: Launch check（打不开就不许发）
         shell: pwsh

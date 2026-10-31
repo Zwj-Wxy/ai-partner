@@ -99,8 +99,23 @@ Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
 > Streamlit 在 `import` 时会用 `importlib.metadata` 读自己的版本号，如果打包时没把
 > `streamlit-x.y.z.dist-info` 一起带上，exe 一启动就直接崩，报
 > `PackageNotFoundError: No package metadata was found for streamlit`
-> ——控制台窗口一闪就没，看不出所以然。CI 里有一道「Launch check」，会真的把 exe 跑起来、
-> 等 8501 端口返回 200 才发布，就是为了挡住这种"打不开的包"。
+> ——控制台窗口一闪就没，看不出所以然。
+
+这个包以前就坏在这里。PyInstaller 只顺着 `import` 链打包 `.py` 代码，
+而 Streamlit 还依赖两样"不是代码"的东西——
+
+| 缺什么 | 症状 | 谁负责补 |
+| --- | --- | --- |
+| `streamlit-x.y.z.dist-info`（元数据） | 启动瞬间崩：`PackageNotFoundError` | `app.spec` 里的 `copy_metadata("streamlit")` |
+| `streamlit/static/`（前端 JS/CSS） | 服务起来了，但浏览器一片白 | `app.spec` 里的 `collect_all("streamlit")` |
+
+所以打包链路现在是三道闸：
+
+1. `python scripts/verify_bundle.py` —— 检查产物里 exe / app.py / resources / static / dist-info 是否齐全，还比对包内 `app.py` 与源码的 sha256，防止发出旧代码打的包；
+2. `python tests/test_apptest.py` —— 用**真 Streamlit** 的 `AppTest` 把页面渲染三遍（无 key / 填了 key / 清空 key），确认不抛异常；
+3. CI 里的「Launch check」—— 真的把 exe 跑起来，等 `http://127.0.0.1:8501` 返回 200 才允许发布。
+
+三道闸任意一道不过，Release 就不会生成。
 
 产物结构（约 200 MB，PyInstaller **onedir 模式**，比 onefile 启动快很多）：
 
@@ -201,9 +216,12 @@ ai_partner/
 ├── packaging/                  # 提供给最终用户的启动/停止脚本
 ├── docs/使用说明.md            # 给最终用户看的说明书
 ├── docs/banner.png             # README 横幅
-├── tests/test_smoke.py         # 冒烟测试（不依赖网络，CI 里会跑）
+├── docs/original/05.ai_partner_4.py  # 最初那份单文件源码（存档）
+├── tests/test_smoke.py         # 冒烟测试（假 Streamlit，不需要网络）
+├── tests/test_apptest.py       # 真 Streamlit 的 AppTest 渲染测试
 ├── .streamlit/config.toml      # 主题与运行参数
 ├── scripts/build.ps1           # 一键打包脚本
+├── scripts/verify_bundle.py    # 产物完整性检查（缺 static/元数据就报错）
 ├── scripts/make_banner.py      # 重新生成横幅
 └── .github/workflows/
     └── build-release.yml       # 推 tag 自动打包并发 Release
@@ -232,7 +250,14 @@ PyInstaller 产物被误报很常见。可选做法：给 exe 加代码签名证
 也可以用环境变量 `AI_PARTNER_HOME` 指定一个数据目录（比如放到 U 盘或网盘同步盘里），会话与 `config.json` 都会跟着走。
 
 **Q：怎么自测有没有改坏？**
-`python tests/test_smoke.py` —— 不需要联网、不需要真的 API Key，跑一遍就能发现语法错误和路径问题。
+三条命令，都不需要真的 API Key、不花钱：
+
+```powershell
+python -m py_compile app.py launcher.py     # 语法
+python tests/test_smoke.py                  # 冒烟（假 Streamlit，不联网）
+python tests/test_apptest.py                # 真 Streamlit 渲染页面（需要装了 streamlit）
+python scripts/verify_bundle.py             # 打完包后检查产物齐不齐
+```
 
 ## 📄 许可证
 

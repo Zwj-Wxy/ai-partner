@@ -50,7 +50,12 @@ $outDir = Join-Path $root 'dist\AI智能伴侣'
 Copy-Item (Join-Path $root 'packaging\*.bat') $outDir -Force
 Copy-Item (Join-Path $root 'docs\使用说明.md') $outDir -Force
 
-# 5. 压缩
+# 5. 完整性自检：少了 streamlit 的元数据/前端资源，包就是打不开或白屏
+Write-Host "==> 检查产物完整性" -ForegroundColor Cyan
+& $venvPython (Join-Path $root 'scripts\verify_bundle.py')
+if ($LASTEXITCODE -ne 0) { throw "产物不完整，别发布这个包" }
+
+# 6. 压缩
 if (-not $NoZip) {
     $zip = Join-Path $root 'AI-Partner-Windows-x64.zip'
     if (Test-Path $zip) { Remove-Item $zip -Force }
