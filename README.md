@@ -117,6 +117,10 @@ Copy-Item docs\使用说明.md dist\AI智能伴侣\ -Force
 
 三道闸任意一道不过，Release 就不会生成。
 
+> 实测记录（2026-10-31）：Python 3.13.9 + Streamlit 1.66.0 + PyInstaller 6.22.3 打包，
+> exe 启动后 `http://127.0.0.1:8501` 返回 200、`_stcore/health` 返回 `ok`，
+> `AppTest` 三种情形均无异常。
+
 产物结构（约 200 MB，PyInstaller **onedir 模式**，比 onefile 启动快很多）：
 
 ```
